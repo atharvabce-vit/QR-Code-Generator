@@ -1,0 +1,5 @@
+pnr,name,train_no,train_name,coach,seat,from,to,date,status,fare
+4218765432,A. Sharma,12951,Rajdhani Express,B3,42,Mumbai Central,New Delhi,2026-11-20,CNF,2450
+4218765433,R. Iyer,12009,Shatabdi Express,C2,18,Pune,Mumbai CST,2026-11-21,CNF,890
+4218765434,S. Khan,12301,Howrah Rajdhani,A1,7,Howrah,New Delhi,2026-11-22,RAC,3120
+4218765435,P. Nair,12625,Kerala Express,S4,63,Trivandrum,Delhi,2026-11-23,WL,1780
