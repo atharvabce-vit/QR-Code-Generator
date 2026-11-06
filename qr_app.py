@@ -8,6 +8,7 @@ import qr_core
 import qr_export
 import qr_io
 import qr_payload
+import qr_scan
 import qr_style
 from qr_card import render_qr_card
 
@@ -132,9 +133,11 @@ class QRApp(ctk.CTk):
         self.content = ""
         self.fields = {}
         self.logo_path = None
+        self.camera = None
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build_form()
         self._build_preview()
@@ -241,6 +244,25 @@ class QRApp(ctk.CTk):
             hover_color="#276749",
             command=self.batch_import,
         ).pack(fill="x", pady=(18, 4))
+
+        ctk.CTkLabel(panel, text="Scan & verify", anchor="w").pack(fill="x", pady=(24, 0))
+
+        ctk.CTkLabel(panel, text="Decoded payload (you can also paste one here)", anchor="w").pack(
+            fill="x", pady=(8, 0)
+        )
+        self.scan_result = ctk.CTkTextbox(panel, height=100)
+        self.scan_result.pack(fill="x", pady=(6, 0))
+
+        ctk.CTkLabel(panel, text="Camera index", anchor="w").pack(fill="x", pady=(8, 0))
+        self.camera_entry = ctk.CTkEntry(panel, placeholder_text="0")
+        self.camera_entry.insert(0, "0")
+        self.camera_entry.pack(fill="x")
+
+        ctk.CTkButton(panel, text="Scan QR from image file", command=self.scan_image).pack(fill="x", pady=(10, 4))
+        self.webcam_button = ctk.CTkButton(panel, text="Start webcam scan", command=self.webcam_scan)
+        self.webcam_button.pack(fill="x", pady=4)
+        ctk.CTkButton(panel, text="Check signature of payload", command=self.check_signature).pack(fill="x", pady=4)
+        ctk.CTkButton(panel, text="Check scannability", command=self.check_scannability).pack(fill="x", pady=(4, 12))
 
     def _build_preview(self):
         panel = ctk.CTkFrame(self)
@@ -474,6 +496,113 @@ class QRApp(ctk.CTk):
             "QR Code Generator",
             f"Generated {len(cards)} QR PNG(s) and a combined PDF in:\n{out_dir}",
         )
+
+    def _on_close(self):
+        self._stop_webcam()
+        self.destroy()
+
+    def _load_result(self, text):
+        self.scan_result.delete("1.0", "end")
+        self.scan_result.insert("1.0", text)
+
+    def _signature_message(self, text):
+        text = (text or "").strip()
+        if not text:
+            return "Nothing to verify. Scan a code or paste a payload first."
+        if "|SIG:" not in text:
+            return "This payload has no signature, so it cannot be checked."
+        if qr_scan.verify_signed(text):
+            return "Signature is valid. The payload was not changed."
+        return "Signature check failed. The payload may have been changed."
+
+    def scan_image(self):
+        path = filedialog.askopenfilename(
+            title="Choose a QR image",
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.webp *.gif"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            text = qr_scan.decode_image(path)
+        except Exception as error:
+            messagebox.showerror("QR Code Generator", f"Could not scan that image:\n{error}")
+            return
+        if not text:
+            self._load_result("")
+            messagebox.showwarning("QR Code Generator", "No QR code was found in that image.")
+            return
+        self._load_result(text)
+        self.status.configure(text=self._signature_message(text))
+
+    def webcam_scan(self):
+        if self.camera is not None:
+            self._stop_webcam()
+            self.status.configure(text="Webcam stopped")
+            return
+        try:
+            camera = qr_scan.open_camera(_as_int(self.camera_entry.get(), 0))
+        except Exception as error:
+            messagebox.showerror("QR Code Generator", f"Could not open the camera:\n{error}")
+            return
+        if not camera.isOpened():
+            camera.release()
+            messagebox.showwarning("QR Code Generator", "No webcam found. Try another camera index.")
+            return
+        self.camera = camera
+        self.webcam_button.configure(text="Stop webcam scan")
+        self.status.configure(text="Webcam is running. Hold a QR code in front of the camera.")
+
+    def _stop_webcam(self):
+        if self.camera is not None:
+            self.camera.release()
+            self.camera = None
+        if hasattr(self, "webcam_button"):
+            self.webcam_button.configure(text="Start webcam scan")
+
+    def _webcam_tick(self):
+        if self.camera is None:
+            return
+        ok, frame = self.camera.read()
+        if ok:
+            text = qr_scan.decode_frame(frame)
+            if text:
+                self._stop_webcam()
+                self._load_result(text)
+                self.status.configure(text=self._signature_message(text))
+                messagebox.showinfo("QR Code Generator", f"Scanned from webcam:\n\n{text}")
+                return
+            image = qr_scan.frame_to_image(frame, PREVIEW_WIDTH)
+            self.preview_image = ctk.CTkImage(light_image=image, size=image.size)
+            self.preview.configure(image=self.preview_image, text="")
+        self.after(60, self._webcam_tick)
+
+    def check_signature(self):
+        message = self._signature_message(self.scan_result.get("1.0", "end"))
+        self.status.configure(text=message)
+        messagebox.showinfo("Signature check", message)
+
+    def check_scannability(self):
+        kind, content = self._build_content()
+        if not content:
+            messagebox.showwarning("QR Code Generator", "Please fill in the fields first.")
+            return
+        options = self._export_options()
+        result = qr_scan.scannability(
+            content,
+            ec=options["ec"],
+            border=options["border"],
+            box_size=options["box_size"],
+            size=options["size"],
+            fg=options["fg"],
+            bg=options["bg"],
+        )
+        summary = f"Version {result['version']} ({result['modules']} x {result['modules']} modules)"
+        self.status.configure(text=f"Scannability: {summary}")
+        if result["ok"]:
+            messagebox.showinfo("Scannability check", f"{summary}\n\nLooks good, this code should scan reliably.")
+            return
+        lines = "\n".join(f"- {line}" for line in result["messages"])
+        messagebox.showwarning("Scannability check", f"{summary}\n\nWarnings:\n{lines}")
 
 
 def main():
