@@ -1,3 +1,4 @@
+import json
 import os
 from tkinter import filedialog, messagebox
 
@@ -12,8 +13,25 @@ import qr_scan
 import qr_style
 from qr_card import render_qr_card
 
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except ImportError:
+    DND_FILES = None
+    TkinterDnD = None
+
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
+
+
+if TkinterDnD is not None:
+
+    class _Window(ctk.CTk, TkinterDnD.DnDWrapper):
+        pass
+
+else:
+
+    class _Window(ctk.CTk):
+        pass
 
 
 def _as_int(value, fallback):
@@ -31,6 +49,8 @@ def _as_float(value, fallback):
 
 
 PREVIEW_WIDTH = 520
+HISTORY_LIMIT = 8
+DROP_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff")
 TYPES = [
     "Text",
     "URL",
@@ -121,9 +141,11 @@ FIELD_DEFS = {
 }
 
 
-class QRApp(ctk.CTk):
+class QRApp(_Window):
     def __init__(self):
         super().__init__()
+        if TkinterDnD is not None:
+            self.TkdndVersion = TkinterDnD._require(self)
         self.title("QR Code Generator")
         self.geometry("1120x700")
         self.minsize(1020, 660)
@@ -134,6 +156,8 @@ class QRApp(ctk.CTk):
         self.fields = {}
         self.logo_path = None
         self.camera = None
+        self.history = []
+        self.preview_job = None
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -142,12 +166,37 @@ class QRApp(ctk.CTk):
         self._build_form()
         self._build_preview()
         self._rebuild_fields("Text")
+        self._bind_shortcuts()
+        if TkinterDnD is not None:
+            self.drop_target_register(DND_FILES)
+            self.dnd_bind("<<Drop>>", self._on_drop)
+
+    def _bind_shortcuts(self):
+        self.bind("<Control-g>", lambda event: self.generate())
+        self.bind("<Control-s>", lambda event: self.save_png())
+        self.bind("<Control-d>", self._duplicate_shortcut)
 
     def _build_form(self):
         panel = ctk.CTkScrollableFrame(self, width=360, label_text="QR settings")
         panel.grid(row=0, column=0, sticky="nsw", padx=(12, 6), pady=12)
 
-        ctk.CTkLabel(panel, text="Content type", anchor="w").pack(fill="x", pady=(4, 0))
+        ctk.CTkLabel(panel, text="Theme", anchor="w").pack(fill="x", pady=(4, 0))
+        self.theme_var = ctk.StringVar(value="System")
+        ctk.CTkOptionMenu(
+            panel, values=["System", "Light", "Dark"], variable=self.theme_var, command=ctk.set_appearance_mode
+        ).pack(fill="x")
+
+        ctk.CTkLabel(panel, text="Presets (colors, EC level, style, caption)", anchor="w").pack(fill="x", pady=(12, 0))
+        ctk.CTkButton(panel, text="Save preset as JSON", command=self.save_preset).pack(fill="x", pady=(6, 4))
+        ctk.CTkButton(panel, text="Load preset from JSON", command=self.load_preset).pack(fill="x", pady=4)
+
+        ctk.CTkLabel(panel, text="Quick paste (auto-detect type)", anchor="w").pack(fill="x", pady=(14, 0))
+        self.quick_entry = ctk.CTkEntry(panel, placeholder_text="Paste a link, email, phone, Wi-Fi…")
+        self.quick_entry.pack(fill="x", pady=(6, 0))
+        self.quick_entry.bind("<Return>", self.quick_detect)
+        ctk.CTkButton(panel, text="Detect type and fill fields", command=self.quick_detect).pack(fill="x", pady=(6, 0))
+
+        ctk.CTkLabel(panel, text="Content type", anchor="w").pack(fill="x", pady=(14, 0))
         self.type_var = ctk.StringVar(value="Text")
         ctk.CTkOptionMenu(panel, values=TYPES, variable=self.type_var, command=self._rebuild_fields).pack(fill="x")
 
@@ -232,10 +281,11 @@ class QRApp(ctk.CTk):
         self.cm_entry.insert(0, "5")
         self.cm_entry.pack(fill="x")
 
-        ctk.CTkButton(panel, text="Generate QR code", command=self.generate).pack(fill="x", pady=(18, 4))
+        ctk.CTkButton(panel, text="Generate QR code  (Ctrl+G)", command=self.generate).pack(fill="x", pady=(18, 4))
+        ctk.CTkButton(panel, text="Duplicate previous QR  (Ctrl+D)", command=self.duplicate_previous).pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Export QR (selected format)", command=self.export_qr).pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Copy QR image to clipboard", command=self.copy_qr).pack(fill="x", pady=4)
-        ctk.CTkButton(panel, text="Save card as PNG", command=self.save_png).pack(fill="x", pady=(12, 4))
+        ctk.CTkButton(panel, text="Save card as PNG  (Ctrl+S)", command=self.save_png).pack(fill="x", pady=(12, 4))
         ctk.CTkButton(panel, text="Save card as PDF", command=self.save_pdf).pack(fill="x", pady=4)
         ctk.CTkButton(
             panel,
@@ -264,6 +314,16 @@ class QRApp(ctk.CTk):
         ctk.CTkButton(panel, text="Check signature of payload", command=self.check_signature).pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Check scannability", command=self.check_scannability).pack(fill="x", pady=(4, 12))
 
+        self._connect_live()
+
+    def _connect_live(self):
+        for entry in (self.caption_entry, self.fg_entry, self.bg_entry, self.gradient_end_entry,
+                      self.border_entry, self.box_entry):
+            entry.bind("<KeyRelease>", self._schedule_preview)
+        for var in (self.ec_var, self.style_var, self.finder_var, self.gradient_var,
+                    self.transparent_var, self.sign_var):
+            var.trace_add("write", self._schedule_preview)
+
     def _build_preview(self):
         panel = ctk.CTkFrame(self)
         panel.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
@@ -278,10 +338,31 @@ class QRApp(ctk.CTk):
             corner_radius=12,
             wraplength=460,
         )
-        self.preview.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+        self.preview.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 6))
 
-        self.status = ctk.CTkLabel(panel, text="Ready", anchor="w")
-        self.status.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+        zoom = ctk.CTkFrame(panel, fg_color="transparent")
+        zoom.grid(row=1, column=0, sticky="ew", padx=12)
+        ctk.CTkLabel(zoom, text="Zoom", width=44, anchor="w").pack(side="left")
+        self.zoom_var = ctk.DoubleVar(value=1.0)
+        ctk.CTkSlider(zoom, from_=0.5, to=1.5, number_of_steps=20, variable=self.zoom_var,
+                      command=self._zoom_changed).pack(side="left", fill="x", expand=True, padx=8)
+        self.zoom_label = ctk.CTkLabel(zoom, text="100%", width=52, anchor="e")
+        self.zoom_label.pack(side="left")
+
+        ctk.CTkLabel(panel, text="Recent QR codes (click one to reuse)", anchor="w").grid(
+            row=2, column=0, sticky="ew", padx=12, pady=(10, 0)
+        )
+        self.history_frame = ctk.CTkScrollableFrame(panel, orientation="horizontal", height=96)
+        self.history_frame.grid(row=3, column=0, sticky="ew", padx=12)
+
+        self.status = ctk.CTkLabel(
+            panel,
+            text="Ready. Tip: drag a .csv, .xlsx or image file onto this window.",
+            anchor="w",
+            wraplength=560,
+            justify="left",
+        )
+        self.status.grid(row=4, column=0, sticky="ew", padx=12, pady=(6, 12))
 
     def _rebuild_fields(self, kind):
         for widget in self.fields_frame.winfo_children():
@@ -297,7 +378,8 @@ class QRApp(ctk.CTk):
                 if default:
                     widget.insert("1.0", default)
             elif widget_kind == "choice":
-                widget = ctk.CTkOptionMenu(self.fields_frame, values=options or [])
+                widget = ctk.CTkOptionMenu(self.fields_frame, values=options or [],
+                                           command=self._schedule_preview)
                 widget.set(default)
                 widget.pack(fill="x")
             else:
@@ -305,8 +387,10 @@ class QRApp(ctk.CTk):
                 widget.pack(fill="x")
                 if default:
                     widget.insert(0, default)
+            widget.bind("<KeyRelease>", self._schedule_preview)
             self.fields[key] = widget
         self.status.configure(text=f"Content type: {kind}")
+        self._schedule_preview()
 
     def _collect(self):
         values = {}
@@ -373,10 +457,35 @@ class QRApp(ctk.CTk):
         return render_qr_card(kind, qr, content, caption)
 
     def _show(self, card):
-        height = int(PREVIEW_WIDTH * card.height / card.width)
-        preview = card.resize((PREVIEW_WIDTH, height), Image.LANCZOS)
-        self.preview_image = ctk.CTkImage(light_image=preview, size=(PREVIEW_WIDTH, height))
+        if card is None:
+            return
+        width = max(160, min(880, round(PREVIEW_WIDTH * self.zoom_var.get())))
+        height = int(width * card.height / card.width)
+        preview = card.resize((width, height), Image.LANCZOS)
+        self.preview_image = ctk.CTkImage(light_image=preview, size=(width, height))
         self.preview.configure(image=self.preview_image, text="")
+
+    def _zoom_changed(self, value):
+        self.zoom_label.configure(text=f"{round(float(value) * 100)}%")
+        self._show(self.card_image)
+
+    def _schedule_preview(self, *args):
+        if self.preview_job is not None:
+            self.after_cancel(self.preview_job)
+        self.preview_job = self.after(400, self._live_update)
+
+    def _live_update(self):
+        self.preview_job = None
+        if self.camera is not None:
+            return
+        kind, content = self._build_content()
+        if not content:
+            return
+        card = self._render(kind, content, self.caption_entry.get().strip())
+        self.card_image = card
+        self.content = content
+        self._show(card)
+        self.status.configure(text=f"Live preview: {kind}")
 
     def generate(self):
         kind, content = self._build_content()
@@ -387,7 +496,166 @@ class QRApp(ctk.CTk):
         self.card_image = card
         self.content = content
         self._show(card)
+        self._add_history(kind, content, card)
         self.status.configure(text=f"Generated {kind} QR code")
+
+    def duplicate_previous(self):
+        if not self.content:
+            messagebox.showwarning("QR Code Generator", "There is nothing to duplicate yet.")
+            return
+        kind, content = self._build_content()
+        if not content:
+            return
+        card = self._render(kind, content, self.caption_entry.get().strip())
+        self.card_image = card
+        self.content = content
+        self._show(card)
+        self._add_history(kind, content, card)
+        self.status.configure(text=f"Duplicated the previous {kind} QR code")
+
+    def _duplicate_shortcut(self, event=None):
+        widget = self.focus_get()
+        if widget is not None and widget.winfo_class() == "Text":
+            return
+        self.duplicate_previous()
+
+    def _add_history(self, kind, content, card):
+        self.history.insert(0, {
+            "kind": kind,
+            "content": content,
+            "caption": self.caption_entry.get().strip(),
+            "card": card,
+            "thumb": None,
+        })
+        del self.history[HISTORY_LIMIT:]
+        self._refresh_history()
+
+    def _refresh_history(self):
+        for widget in self.history_frame.winfo_children():
+            widget.destroy()
+        for index, item in enumerate(self.history):
+            thumb = item["card"].copy()
+            thumb.thumbnail((64, 64), Image.LANCZOS)
+            image = ctk.CTkImage(light_image=thumb, size=thumb.size)
+            item["thumb"] = image
+            ctk.CTkButton(
+                self.history_frame,
+                image=image,
+                text="",
+                width=72,
+                height=72,
+                fg_color="transparent",
+                hover_color="#D1D5DB",
+                command=lambda i=index: self._recall(i),
+            ).pack(side="left", padx=4, pady=4)
+
+    def _recall(self, index):
+        item = self.history[index]
+        self.content = item["content"]
+        self.card_image = item["card"]
+        self.caption_entry.delete(0, "end")
+        if item["caption"]:
+            self.caption_entry.insert(0, item["caption"])
+        self._show(item["card"])
+        self.status.configure(text=f"Reused an earlier {item['kind']} QR code")
+
+    def quick_detect(self, event=None):
+        text = self.quick_entry.get().strip()
+        if not text:
+            return
+        kind, values = qr_payload.detect(text)
+        if kind is None:
+            return
+        self.type_var.set(kind)
+        self._rebuild_fields(kind)
+        for key, value in values.items():
+            widget = self.fields.get(key)
+            if widget is None or not value:
+                continue
+            if isinstance(widget, ctk.CTkTextbox):
+                widget.delete("1.0", "end")
+                widget.insert("1.0", value)
+            elif isinstance(widget, ctk.CTkOptionMenu):
+                widget.set(value)
+            else:
+                widget.delete(0, "end")
+                widget.insert(0, value)
+        self.status.configure(text=f"Detected type: {kind}")
+        self._schedule_preview()
+
+    def _settings(self):
+        return {
+            "ec": self.ec_var.get(),
+            "style": self.style_var.get(),
+            "finder": self.finder_var.get(),
+            "fg": self.fg_entry.get(),
+            "bg": self.bg_entry.get(),
+            "gradient": self.gradient_var.get(),
+            "gradient_end": self.gradient_end_entry.get(),
+            "transparent": self.transparent_var.get(),
+            "border": self.border_entry.get(),
+            "box": self.box_entry.get(),
+            "caption": self.caption_entry.get(),
+            "sign": self.sign_var.get(),
+            "theme": self.theme_var.get(),
+        }
+
+    def _apply_settings(self, data):
+        for key, var in (("ec", self.ec_var), ("style", self.style_var), ("finder", self.finder_var),
+                         ("theme", self.theme_var)):
+            if key in data:
+                var.set(data[key])
+        for key, entry in (("fg", self.fg_entry), ("bg", self.bg_entry),
+                           ("gradient_end", self.gradient_end_entry), ("border", self.border_entry),
+                           ("box", self.box_entry), ("caption", self.caption_entry)):
+            if key in data:
+                entry.delete(0, "end")
+                if data[key]:
+                    entry.insert(0, str(data[key]))
+        for key, var in (("gradient", self.gradient_var), ("transparent", self.transparent_var),
+                         ("sign", self.sign_var)):
+            if key in data:
+                var.set(bool(data[key]))
+        ctk.set_appearance_mode(self.theme_var.get())
+
+    def save_preset(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON preset", "*.json")],
+            initialfile="qr_preset.json",
+        )
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(self._settings(), handle, indent=2)
+        self.status.configure(text=f"Preset saved: {path}")
+
+    def load_preset(self):
+        path = filedialog.askopenfilename(filetypes=[("JSON preset", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception as error:
+            messagebox.showerror("QR Code Generator", f"Could not read that preset:\n{error}")
+            return
+        self._apply_settings(data)
+        self._schedule_preview()
+        self.status.configure(text=f"Preset loaded: {os.path.basename(path)}")
+
+    def _on_drop(self, event):
+        paths = self.tk.splitlist(event.data)
+        if not paths:
+            return
+        path = paths[0]
+        extension = os.path.splitext(path)[1].lower()
+        if extension in (".csv", ".xlsx", ".xlsm"):
+            self.batch_import(path)
+        elif extension in DROP_EXTENSIONS:
+            self.scan_image(path)
+        else:
+            messagebox.showwarning("QR Code Generator", f"That file type is not supported: {extension}")
 
     def save_png(self):
         if self.card_image is None:
@@ -462,10 +730,11 @@ class QRApp(ctk.CTk):
         qr_io.export_pdf([self.card_image], path)
         self.status.configure(text=f"Saved: {path}")
 
-    def batch_import(self):
-        path = filedialog.askopenfilename(
-            filetypes=[("Data files", "*.csv *.xlsx *.xlsm"), ("CSV", "*.csv"), ("Excel", "*.xlsx *.xlsm")]
-        )
+    def batch_import(self, path=None):
+        if not path:
+            path = filedialog.askopenfilename(
+                filetypes=[("Data files", "*.csv *.xlsx *.xlsm"), ("CSV", "*.csv"), ("Excel", "*.xlsx *.xlsm")]
+            )
         if not path:
             return
         try:
@@ -515,11 +784,12 @@ class QRApp(ctk.CTk):
             return "Signature is valid. The payload was not changed."
         return "Signature check failed. The payload may have been changed."
 
-    def scan_image(self):
-        path = filedialog.askopenfilename(
-            title="Choose a QR image",
-            filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.webp *.gif"), ("All files", "*.*")],
-        )
+    def scan_image(self, path=None):
+        if not path:
+            path = filedialog.askopenfilename(
+                title="Choose a QR image",
+                filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.webp *.gif"), ("All files", "*.*")],
+            )
         if not path:
             return
         try:
