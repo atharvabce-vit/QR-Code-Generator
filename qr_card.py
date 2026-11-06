@@ -46,6 +46,16 @@ def render_qr_card(title, qr_image, content, caption="", accent=ACCENT):
     width = 720
     header_h = 60
     qr_y = 88
+
+    limit = width - 120
+    if qr_image.width > limit:
+        ratio = limit / qr_image.width
+        qr_image = qr_image.resize((limit, int(qr_image.height * ratio)), Image.LANCZOS)
+    if qr_image.mode == "RGBA":
+        flattened = Image.new("RGB", qr_image.size, "white")
+        flattened.paste(qr_image, (0, 0), qr_image)
+        qr_image = flattened
+
     info_y = qr_y + qr_image.height + 28
     height = info_y + 200
 

@@ -7,6 +7,7 @@ from PIL import Image
 import qr_core
 import qr_io
 import qr_payload
+import qr_style
 from qr_card import render_qr_card
 
 ctk.set_appearance_mode("System")
@@ -114,6 +115,7 @@ class QRApp(ctk.CTk):
         self.preview_image = None
         self.content = ""
         self.fields = {}
+        self.logo_path = None
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -142,8 +144,62 @@ class QRApp(ctk.CTk):
             fill="x", pady=(12, 0)
         )
 
+        ctk.CTkLabel(panel, text="Appearance", anchor="w").pack(fill="x", pady=(18, 0))
+
+        ctk.CTkLabel(panel, text="Error correction (L / M / Q / H)", anchor="w").pack(fill="x", pady=(8, 0))
+        self.ec_var = ctk.StringVar(value="M")
+        ctk.CTkOptionMenu(panel, values=["L", "M", "Q", "H"], variable=self.ec_var).pack(fill="x")
+
+        ctk.CTkLabel(panel, text="Module style", anchor="w").pack(fill="x", pady=(8, 0))
+        self.style_var = ctk.StringVar(value="Square")
+        ctk.CTkOptionMenu(panel, values=["Square", "Rounded", "Dots", "Classy"], variable=self.style_var).pack(fill="x")
+
+        ctk.CTkLabel(panel, text="Finder (eyes) style", anchor="w").pack(fill="x", pady=(8, 0))
+        self.finder_var = ctk.StringVar(value="Square")
+        ctk.CTkOptionMenu(panel, values=["Square", "Rounded", "Circle"], variable=self.finder_var).pack(fill="x")
+
+        ctk.CTkLabel(panel, text="Foreground color", anchor="w").pack(fill="x", pady=(8, 0))
+        self.fg_entry = ctk.CTkEntry(panel, placeholder_text="#000000")
+        self.fg_entry.insert(0, "#000000")
+        self.fg_entry.pack(fill="x")
+
+        ctk.CTkLabel(panel, text="Background color", anchor="w").pack(fill="x", pady=(8, 0))
+        self.bg_entry = ctk.CTkEntry(panel, placeholder_text="#FFFFFF")
+        self.bg_entry.insert(0, "#FFFFFF")
+        self.bg_entry.pack(fill="x")
+
+        self.gradient_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(panel, text="Gradient fill", variable=self.gradient_var).pack(fill="x", pady=(8, 0))
+        ctk.CTkLabel(panel, text="Gradient end color", anchor="w").pack(fill="x", pady=(8, 0))
+        self.gradient_end_entry = ctk.CTkEntry(panel, placeholder_text="#3B82F6")
+        self.gradient_end_entry.insert(0, "#3B82F6")
+        self.gradient_end_entry.pack(fill="x")
+
+        self.transparent_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(panel, text="Transparent background", variable=self.transparent_var).pack(
+            fill="x", pady=(8, 0)
+        )
+
+        ctk.CTkLabel(panel, text="Quiet zone (modules)", anchor="w").pack(fill="x", pady=(8, 0))
+        self.border_entry = ctk.CTkEntry(panel, placeholder_text="4")
+        self.border_entry.insert(0, "4")
+        self.border_entry.pack(fill="x")
+
+        ctk.CTkLabel(panel, text="Module size (px, for saved PNG)", anchor="w").pack(fill="x", pady=(8, 0))
+        self.box_entry = ctk.CTkEntry(panel, placeholder_text="10")
+        self.box_entry.insert(0, "10")
+        self.box_entry.pack(fill="x")
+
+        ctk.CTkLabel(panel, text="Center logo", anchor="w").pack(fill="x", pady=(10, 0))
+        ctk.CTkButton(panel, text="Choose logo image", command=self.choose_logo).pack(fill="x", pady=(6, 0))
+        self.logo_label = ctk.CTkLabel(panel, text="No logo selected", anchor="w", text_color="#6B7280")
+        self.logo_label.pack(fill="x")
+        ctk.CTkButton(panel, text="Clear logo", command=self.clear_logo, fg_color="#4B5563",
+                      hover_color="#374151").pack(fill="x", pady=(4, 0))
+
         ctk.CTkButton(panel, text="Generate QR code", command=self.generate).pack(fill="x", pady=(18, 4))
         ctk.CTkButton(panel, text="Save card as PNG", command=self.save_png).pack(fill="x", pady=4)
+        ctk.CTkButton(panel, text="Save QR as PNG (styled)", command=self.save_qr_png).pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Save card as PDF", command=self.save_pdf).pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Save QR as SVG (vector)", command=self.save_svg).pack(fill="x", pady=4)
         ctk.CTkButton(
@@ -214,8 +270,45 @@ class QRApp(ctk.CTk):
             content = qr_payload.sign(content)
         return kind, content
 
+    def _appearance(self, size=None, box_size=None):
+        options = {
+            "size": size,
+            "box_size": box_size,
+            "border": self.border_entry.get(),
+            "ec": self.ec_var.get(),
+            "style": self.style_var.get(),
+            "finder": self.finder_var.get(),
+            "fg": self.fg_entry.get(),
+            "bg": self.bg_entry.get(),
+            "gradient": self.gradient_var.get(),
+            "gradient_end": self.gradient_end_entry.get(),
+            "transparent": self.transparent_var.get(),
+            "logo_path": self.logo_path,
+        }
+        if self.logo_path and options["ec"] != "H":
+            options["ec"] = "H"
+        return options
+
+    def choose_logo(self):
+        path = filedialog.askopenfilename(
+            title="Choose a logo image",
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.gif"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        self.logo_path = path
+        self.logo_label.configure(text=os.path.basename(path))
+        if self.ec_var.get() != "H":
+            self.ec_var.set("H")
+        self.status.configure(text="Logo set (error correction raised to H)")
+
+    def clear_logo(self):
+        self.logo_path = None
+        self.logo_label.configure(text="No logo selected")
+        self.status.configure(text="Logo cleared")
+
     def _render(self, kind, content, caption=""):
-        qr = qr_core.render_square(content, 300)
+        qr = qr_style.render(content, **self._appearance(size=300))
         return render_qr_card(kind, qr, content, caption)
 
     def _show(self, card):
@@ -247,6 +340,21 @@ class QRApp(ctk.CTk):
         if not path:
             return
         self.card_image.save(path)
+        self.status.configure(text=f"Saved: {path}")
+
+    def save_qr_png(self):
+        if not self.content:
+            messagebox.showwarning("QR Code Generator", "Generate a QR code first.")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG image", "*.png")],
+            initialfile=f"{qr_io.safe_name(self.content)}_qr.png",
+        )
+        if not path:
+            return
+        image = qr_style.render(self.content, **self._appearance(box_size=self.box_entry.get()))
+        image.save(path)
         self.status.configure(text=f"Saved: {path}")
 
     def save_pdf(self):
