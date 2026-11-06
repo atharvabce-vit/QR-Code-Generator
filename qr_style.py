@@ -134,7 +134,7 @@ def render(data, size=None, box_size=None, border=4, ec="M", style="Square", fin
     if box_size and _as_int(box_size, 0) > 0:
         box = _as_int(box_size, 10)
     else:
-        box = max(1, _as_int(size, 300) // total)
+        box = max(1, round(_as_int(size, 300) / total))
     side = box * total
 
     mask = Image.new("L", (side, side), 0)

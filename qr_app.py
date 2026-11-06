@@ -5,6 +5,7 @@ import customtkinter as ctk
 from PIL import Image
 
 import qr_core
+import qr_export
 import qr_io
 import qr_payload
 import qr_style
@@ -12,6 +13,21 @@ from qr_card import render_qr_card
 
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
+
+
+def _as_int(value, fallback):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _as_float(value, fallback):
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+
 
 PREVIEW_WIDTH = 520
 TYPES = [
@@ -197,11 +213,27 @@ class QRApp(ctk.CTk):
         ctk.CTkButton(panel, text="Clear logo", command=self.clear_logo, fg_color="#4B5563",
                       hover_color="#374151").pack(fill="x", pady=(4, 0))
 
+        ctk.CTkLabel(panel, text="Export", anchor="w").pack(fill="x", pady=(18, 0))
+        ctk.CTkLabel(panel, text="Format", anchor="w").pack(fill="x", pady=(8, 0))
+        self.format_var = ctk.StringVar(value="PNG")
+        ctk.CTkOptionMenu(panel, values=["PNG", "JPEG", "WebP", "PDF", "EPS", "SVG"],
+                          variable=self.format_var).pack(fill="x")
+
+        ctk.CTkLabel(panel, text="DPI (for raster print)", anchor="w").pack(fill="x", pady=(8, 0))
+        self.dpi_entry = ctk.CTkEntry(panel, placeholder_text="300")
+        self.dpi_entry.insert(0, "300")
+        self.dpi_entry.pack(fill="x")
+
+        ctk.CTkLabel(panel, text="Print width in cm (0 = use module size)", anchor="w").pack(fill="x", pady=(8, 0))
+        self.cm_entry = ctk.CTkEntry(panel, placeholder_text="5")
+        self.cm_entry.insert(0, "5")
+        self.cm_entry.pack(fill="x")
+
         ctk.CTkButton(panel, text="Generate QR code", command=self.generate).pack(fill="x", pady=(18, 4))
-        ctk.CTkButton(panel, text="Save card as PNG", command=self.save_png).pack(fill="x", pady=4)
-        ctk.CTkButton(panel, text="Save QR as PNG (styled)", command=self.save_qr_png).pack(fill="x", pady=4)
+        ctk.CTkButton(panel, text="Export QR (selected format)", command=self.export_qr).pack(fill="x", pady=4)
+        ctk.CTkButton(panel, text="Copy QR image to clipboard", command=self.copy_qr).pack(fill="x", pady=4)
+        ctk.CTkButton(panel, text="Save card as PNG", command=self.save_png).pack(fill="x", pady=(12, 4))
         ctk.CTkButton(panel, text="Save card as PDF", command=self.save_pdf).pack(fill="x", pady=4)
-        ctk.CTkButton(panel, text="Save QR as SVG (vector)", command=self.save_svg).pack(fill="x", pady=4)
         ctk.CTkButton(
             panel,
             text="Batch: import CSV / Excel",
@@ -289,6 +321,13 @@ class QRApp(ctk.CTk):
             options["ec"] = "H"
         return options
 
+    def _export_options(self):
+        dpi = _as_int(self.dpi_entry.get(), 300) or 300
+        cm = _as_float(self.cm_entry.get(), 0.0)
+        if cm > 0:
+            return self._appearance(size=max(64, round(cm / 2.54 * dpi)))
+        return self._appearance(box_size=self.box_entry.get())
+
     def choose_logo(self):
         path = filedialog.askopenfilename(
             title="Choose a logo image",
@@ -342,20 +381,50 @@ class QRApp(ctk.CTk):
         self.card_image.save(path)
         self.status.configure(text=f"Saved: {path}")
 
-    def save_qr_png(self):
+    def export_qr(self):
         if not self.content:
             messagebox.showwarning("QR Code Generator", "Generate a QR code first.")
             return
+        fmt = self.format_var.get()
+        ext = {"JPEG": "jpg", "WebP": "webp"}.get(fmt, fmt.lower())
         path = filedialog.asksaveasfilename(
-            defaultextension=".png",
-            filetypes=[("PNG image", "*.png")],
-            initialfile=f"{qr_io.safe_name(self.content)}_qr.png",
+            defaultextension=f".{ext}",
+            filetypes=[(f"{fmt} file", f"*.{ext}")],
+            initialfile=f"{qr_io.safe_name(self.content)}.{ext}",
         )
         if not path:
             return
-        image = qr_style.render(self.content, **self._appearance(box_size=self.box_entry.get()))
-        image.save(path)
+        try:
+            if fmt in ("PDF", "EPS"):
+                qr_export.save_vector(
+                    self.content, path, fmt,
+                    width_cm=_as_float(self.cm_entry.get(), 5.0) or 5.0,
+                    ec=self.ec_var.get(),
+                    border=_as_int(self.border_entry.get(), 4),
+                    fg=self.fg_entry.get(),
+                    bg=self.bg_entry.get(),
+                )
+            elif fmt == "SVG":
+                qr_core.save_qr_svg(self.content, path)
+            else:
+                image = qr_style.render(self.content, **self._export_options())
+                qr_export.save_raster(image, path, fmt, _as_int(self.dpi_entry.get(), 300))
+        except Exception as error:
+            messagebox.showerror("QR Code Generator", f"Export failed:\n{error}")
+            return
         self.status.configure(text=f"Saved: {path}")
+
+    def copy_qr(self):
+        if not self.content:
+            messagebox.showwarning("QR Code Generator", "Generate a QR code first.")
+            return
+        try:
+            image = qr_style.render(self.content, **self._appearance(box_size=self.box_entry.get()))
+            qr_export.copy_to_clipboard(image)
+        except Exception as error:
+            messagebox.showerror("QR Code Generator", f"Could not copy the image:\n{error}")
+            return
+        self.status.configure(text="QR image copied to clipboard")
 
     def save_pdf(self):
         if self.card_image is None:
@@ -369,20 +438,6 @@ class QRApp(ctk.CTk):
         if not path:
             return
         qr_io.export_pdf([self.card_image], path)
-        self.status.configure(text=f"Saved: {path}")
-
-    def save_svg(self):
-        if not self.content:
-            messagebox.showwarning("QR Code Generator", "Generate a QR code first.")
-            return
-        path = filedialog.asksaveasfilename(
-            defaultextension=".svg",
-            filetypes=[("SVG vector", "*.svg")],
-            initialfile=f"{qr_io.safe_name(self.content)}.svg",
-        )
-        if not path:
-            return
-        qr_core.save_qr_svg(self.content, path)
         self.status.configure(text=f"Saved: {path}")
 
     def batch_import(self):
