@@ -13,7 +13,23 @@ ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
 PREVIEW_WIDTH = 520
-TYPES = ["Text", "URL", "Email", "Phone", "SMS", "Wi-Fi", "Contact"]
+TYPES = [
+    "Text",
+    "URL",
+    "Email",
+    "Phone",
+    "SMS",
+    "Wi-Fi",
+    "Contact",
+    "UPI Payment",
+    "WhatsApp",
+    "Location",
+    "Event",
+    "Crypto",
+    "Social",
+    "App Store",
+    "Smart Link",
+]
 
 FIELD_DEFS = {
     "Text": [("text", "Text or message", "text", "Hello from a QR code")],
@@ -40,6 +56,49 @@ FIELD_DEFS = {
         ("email", "Email", "entry", "hello@example.com"),
         ("org", "Company", "entry", ""),
         ("title", "Job title", "entry", ""),
+        ("website", "Website", "entry", ""),
+        ("address", "Address", "entry", ""),
+        ("notes", "Notes", "text", ""),
+    ],
+    "UPI Payment": [
+        ("pa", "UPI ID / VPA", "entry", "name@bank"),
+        ("pn", "Payee name", "entry", "Shop name"),
+        ("am", "Amount (optional)", "entry", ""),
+        ("tn", "Note (optional)", "entry", ""),
+    ],
+    "WhatsApp": [
+        ("number", "Phone with country code", "entry", "919999999999"),
+        ("message", "Prefilled message", "text", ""),
+    ],
+    "Location": [
+        ("lat", "Latitude", "entry", "19.0760"),
+        ("lng", "Longitude", "entry", "72.8777"),
+        ("label", "Label (optional)", "entry", ""),
+    ],
+    "Event": [
+        ("title", "Event title", "entry", "Team meeting"),
+        ("location", "Location", "entry", ""),
+        ("start", "Start (YYYYMMDDTHHMMSS)", "entry", "20261106T100000"),
+        ("end", "End (YYYYMMDDTHHMMSS)", "entry", "20261106T110000"),
+        ("description", "Details", "text", ""),
+    ],
+    "Crypto": [
+        ("coin", "Coin", "choice", "Bitcoin", ["Bitcoin", "Ethereum"]),
+        ("address", "Wallet address", "entry", ""),
+        ("amount", "Amount (optional)", "entry", ""),
+    ],
+    "Social": [
+        ("platform", "Platform", "choice", "Instagram",
+         ["Instagram", "YouTube", "LinkedIn", "Facebook", "X (Twitter)"]),
+        ("handle", "Username / handle (or full URL)", "entry", "yourname"),
+    ],
+    "App Store": [
+        ("store", "Store", "choice", "Play Store", ["Play Store", "App Store"]),
+        ("app", "Package name / app ID (or full URL)", "entry", "com.example.app"),
+    ],
+    "Smart Link": [
+        ("service", "Service", "choice", "Telegram", ["Telegram", "Zoom", "Spotify", "YouTube"]),
+        ("value", "Link or ID", "entry", ""),
     ],
 }
 
@@ -118,13 +177,19 @@ class QRApp(ctk.CTk):
         for widget in self.fields_frame.winfo_children():
             widget.destroy()
         self.fields = {}
-        for key, label, widget_kind, default in FIELD_DEFS[kind]:
+        for entry in FIELD_DEFS[kind]:
+            key, label, widget_kind, default = entry[:4]
+            options = entry[4] if len(entry) > 4 else None
             ctk.CTkLabel(self.fields_frame, text=label, anchor="w").pack(fill="x", pady=(8, 0))
             if widget_kind == "text":
                 widget = ctk.CTkTextbox(self.fields_frame, height=80)
                 widget.pack(fill="x")
                 if default:
                     widget.insert("1.0", default)
+            elif widget_kind == "choice":
+                widget = ctk.CTkOptionMenu(self.fields_frame, values=options or [])
+                widget.set(default)
+                widget.pack(fill="x")
             else:
                 widget = ctk.CTkEntry(self.fields_frame, placeholder_text=label)
                 widget.pack(fill="x")

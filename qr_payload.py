@@ -45,8 +45,88 @@ def build(kind, values):
             lines.append(f"TEL:{get('phone')}")
         if get("email"):
             lines.append(f"EMAIL:{get('email')}")
+        if get("website"):
+            lines.append(f"URL:{get('website')}")
+        if get("address"):
+            lines.append(f"ADR:;;{get('address')};;;;")
+        if get("notes"):
+            lines.append(f"NOTE:{get('notes')}")
         lines.append("END:VCARD")
         return "\n".join(lines)
+
+    if kind == "UPI Payment":
+        params = [("pa", get("pa")), ("pn", get("pn"))]
+        if get("am"):
+            params.append(("am", get("am")))
+        params.append(("cu", "INR"))
+        if get("tn"):
+            params.append(("tn", get("tn")))
+        query = "&".join(f"{key}={quote(value)}" for key, value in params if value)
+        return f"upi://pay?{query}"
+
+    if kind == "Location":
+        coords = f"{get('lat')},{get('lng')}"
+        label = get("label")
+        return f"geo:{coords}?q={coords}({quote(label)})" if label else f"geo:{coords}"
+
+    if kind == "Event":
+        lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT", f"SUMMARY:{get('title')}"]
+        if get("location"):
+            lines.append(f"LOCATION:{get('location')}")
+        if get("start"):
+            lines.append(f"DTSTART:{get('start')}")
+        if get("end"):
+            lines.append(f"DTEND:{get('end')}")
+        if get("description"):
+            lines.append(f"DESCRIPTION:{get('description')}")
+        lines.extend(["END:VEVENT", "END:VCALENDAR"])
+        return "\n".join(lines)
+
+    if kind == "WhatsApp":
+        number = "".join(ch for ch in get("number") if ch.isdigit())
+        text = quote(get("message"))
+        return f"https://wa.me/{number}?text={text}" if text else f"https://wa.me/{number}"
+
+    if kind == "Crypto":
+        scheme = "bitcoin" if (get("coin") or "Bitcoin") == "Bitcoin" else "ethereum"
+        address, amount = get("address"), get("amount")
+        if not amount:
+            return f"{scheme}:{address}"
+        param = "amount" if scheme == "bitcoin" else "value"
+        return f"{scheme}:{address}?{param}={amount}"
+
+    if kind == "Social":
+        handle, platform = get("handle"), get("platform") or "Instagram"
+        if handle.startswith("http"):
+            return handle
+        base = {
+            "Instagram": "https://instagram.com/",
+            "YouTube": "https://youtube.com/@",
+            "LinkedIn": "https://linkedin.com/in/",
+            "Facebook": "https://facebook.com/",
+            "X (Twitter)": "https://x.com/",
+        }.get(platform, "https://instagram.com/")
+        return base + handle.lstrip("@")
+
+    if kind == "App Store":
+        app_id = get("app")
+        if app_id.startswith("http"):
+            return app_id
+        if (get("store") or "Play Store") == "App Store":
+            return f"https://apps.apple.com/app/id{app_id}"
+        return f"https://play.google.com/store/apps/details?id={app_id}"
+
+    if kind == "Smart Link":
+        value = get("value")
+        if value.startswith("http"):
+            return value
+        base = {
+            "Telegram": "https://t.me/",
+            "Zoom": "https://zoom.us/j/",
+            "Spotify": "https://open.spotify.com/",
+            "YouTube": "https://www.youtube.com/watch?v=",
+        }.get(get("service") or "Telegram", "https://t.me/")
+        return base + value
 
     return get("text")
 
