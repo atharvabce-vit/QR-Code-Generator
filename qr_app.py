@@ -19,8 +19,8 @@ except ImportError:
     DND_FILES = None
     TkinterDnD = None
 
-ctk.set_appearance_mode("System")
-ctk.set_default_color_theme("blue")
+ctk.set_appearance_mode("Dark")
+ctk.set_default_color_theme(os.path.join(os.path.dirname(os.path.abspath(__file__)), "qr_theme.json"))
 
 
 if TkinterDnD is not None:
@@ -181,7 +181,7 @@ class QRApp(_Window):
         panel.grid(row=0, column=0, sticky="nsw", padx=(12, 6), pady=12)
 
         ctk.CTkLabel(panel, text="Theme", anchor="w").pack(fill="x", pady=(4, 0))
-        self.theme_var = ctk.StringVar(value="System")
+        self.theme_var = ctk.StringVar(value="Dark")
         ctk.CTkOptionMenu(
             panel, values=["System", "Light", "Dark"], variable=self.theme_var, command=ctk.set_appearance_mode
         ).pack(fill="x")
@@ -333,7 +333,7 @@ class QRApp(_Window):
         self.preview = ctk.CTkLabel(
             panel,
             text="Pick a content type, fill the fields, then Generate",
-            fg_color="white",
+            fg_color=("#E5E7EB", "#0B0B0B"),
             text_color="#6B7280",
             corner_radius=12,
             wraplength=460,
@@ -545,7 +545,7 @@ class QRApp(_Window):
                 width=72,
                 height=72,
                 fg_color="transparent",
-                hover_color="#D1D5DB",
+                hover_color=("#D1D5DB", "#1E1E1E"),
                 command=lambda i=index: self._recall(i),
             ).pack(side="left", padx=4, pady=4)
 
