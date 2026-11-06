@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import qrcode
+import qrcode.image.svg
 from PIL import Image, ImageTk
 
 
@@ -22,6 +23,18 @@ def make_qr_image(data, box_size=10, border=4):
 def save_qr(data, path, box_size=10, border=4):
     image = make_qr_image(data, box_size, border)
     image.save(path)
+    return path
+
+
+def save_qr_svg(data, path, border=4):
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        border=border,
+        image_factory=qrcode.image.svg.SvgPathImage,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+    qr.make_image().save(path)
     return path
 
 
@@ -99,6 +112,8 @@ def run_gui():
             tk.Button(buttons, text="Generate", width=12, command=self.generate).pack(side="left")
             self.save_button = tk.Button(buttons, text="Save PNG", width=12, state="disabled", command=self.save)
             self.save_button.pack(side="left", padx=8)
+            self.save_svg_button = tk.Button(buttons, text="Save SVG", width=12, state="disabled", command=self.save_svg)
+            self.save_svg_button.pack(side="left")
 
             self.preview_holder = tk.Frame(frame, width=280, height=280, bg="white",
                                            highlightthickness=1, highlightbackground="#cccccc")
@@ -120,6 +135,7 @@ def run_gui():
             self.data = value
             self.preview.config(image=self.image, text="")
             self.save_button.config(state="normal")
+            self.save_svg_button.config(state="normal")
             self.status.config(text="QR code generated. Click 'Save PNG' to export.", fg="#555555")
 
         def save(self):
@@ -133,6 +149,17 @@ def run_gui():
             save_qr(self.data, path)
             self.status.config(text=f"Saved: {path}", fg="#1a7f37")
 
+        def save_svg(self):
+            path = filedialog.asksaveasfilename(
+                defaultextension=".svg",
+                filetypes=[("SVG vector", "*.svg")],
+                initialfile=f"{safe_name(self.data)}.svg",
+            )
+            if not path:
+                return
+            save_qr_svg(self.data, path)
+            self.status.config(text=f"Saved: {path}", fg="#1a7f37")
+
     root = tk.Tk()
     QRApp(root)
     root.mainloop()
@@ -141,7 +168,8 @@ def run_gui():
 def build_parser():
     parser = argparse.ArgumentParser(description="Simple desktop QR code generator.")
     parser.add_argument("-t", "--text", help="Text or URL to encode as a single QR code")
-    parser.add_argument("-o", "--output", help="Output PNG path for single mode (default: qr.png)")
+    parser.add_argument("-o", "--output", help="Output path for single mode (default: qr.png / qr.svg)")
+    parser.add_argument("--svg", action="store_true", help="Save the single QR code as SVG vector")
     parser.add_argument("--csv", help="CSV file for batch mode")
     parser.add_argument("--column", help="CSV column to encode (default: first column)")
     parser.add_argument("--outdir", help="Output folder for batch mode (default: qr_output)")
@@ -157,7 +185,10 @@ def main():
         count, column = run_batch(args.csv, args.outdir or "qr_output", args.column, args.box_size)
         print(f"Generated {count} QR code(s) from column '{column}' into '{args.outdir or 'qr_output'}'.")
     elif args.text:
-        path = save_qr(args.text, args.output or "qr.png", args.box_size)
+        if args.svg:
+            path = save_qr_svg(args.text, args.output or "qr.svg")
+        else:
+            path = save_qr(args.text, args.output or "qr.png", args.box_size)
         print(f"Saved QR code to: {path}")
     else:
         run_gui()

@@ -1,4 +1,5 @@
 import qrcode
+import qrcode.image.svg
 from PIL import Image
 
 
@@ -31,4 +32,16 @@ def render_square(data, target=280, border=4):
 
 def save_qr_image(image, path):
     image.save(path)
+    return path
+
+
+def save_qr_svg(data, path, border=4):
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        border=border,
+        image_factory=qrcode.image.svg.SvgPathImage,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+    qr.make_image().save(path)
     return path

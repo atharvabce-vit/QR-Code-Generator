@@ -86,6 +86,7 @@ class QRApp(ctk.CTk):
         ctk.CTkButton(panel, text="Generate QR code", command=self.generate).pack(fill="x", pady=(18, 4))
         ctk.CTkButton(panel, text="Save card as PNG", command=self.save_png).pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Save card as PDF", command=self.save_pdf).pack(fill="x", pady=4)
+        ctk.CTkButton(panel, text="Save QR as SVG (vector)", command=self.save_svg).pack(fill="x", pady=4)
         ctk.CTkButton(
             panel,
             text="Batch: import CSV / Excel",
@@ -195,6 +196,20 @@ class QRApp(ctk.CTk):
         if not path:
             return
         qr_io.export_pdf([self.card_image], path)
+        self.status.configure(text=f"Saved: {path}")
+
+    def save_svg(self):
+        if not self.content:
+            messagebox.showwarning("QR Code Generator", "Generate a QR code first.")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".svg",
+            filetypes=[("SVG vector", "*.svg")],
+            initialfile=f"{qr_io.safe_name(self.content)}.svg",
+        )
+        if not path:
+            return
+        qr_core.save_qr_svg(self.content, path)
         self.status.configure(text=f"Saved: {path}")
 
     def batch_import(self):
