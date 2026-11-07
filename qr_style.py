@@ -1,3 +1,4 @@
+import math
 import os
 
 import qrcode
@@ -66,6 +67,18 @@ def _module_shape(draw, rect, style, fill, corners):
     span = min(x1 - x0, y1 - y0)
     if style == "Dots":
         draw.ellipse(rect, fill=fill)
+    elif style == "Diamond":
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        draw.polygon([(cx, y0), (x1, cy), (cx, y1), (x0, cy)], fill=fill)
+    elif style == "Star":
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        outer = span / 2
+        points = []
+        for step in range(10):
+            angle = -math.pi / 2 + step * math.pi / 5
+            radius = outer if step % 2 == 0 else outer * 0.44
+            points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+        draw.polygon(points, fill=fill)
     elif style == "Rounded":
         draw.rounded_rectangle(rect, radius=max(1, int(span * 0.30)), fill=fill)
     elif style == "Classy":
@@ -125,7 +138,7 @@ def _add_logo(image, path, plate_color):
 
 def render(data, size=None, box_size=None, border=4, ec="M", style="Square", finder="Square",
            fg="#000000", bg="#FFFFFF", gradient=False, gradient_end="#3B82F6",
-           transparent=False, logo_path=None):
+           transparent=False, logo_path=None, finder_fg=None):
     matrix = _matrix(data, ec)
     n = len(matrix)
     border = max(0, _as_int(border, 4))
@@ -148,8 +161,14 @@ def render(data, size=None, box_size=None, border=4, ec="M", style="Square", fin
             rect = [x0, y0, x0 + box - 1, y0 + box - 1]
             _module_shape(painter, rect, style, 255, _round_corners(matrix, r, c, n))
 
-    for top, left in _finder_zones(n):
-        _draw_finder(painter, top, left, box, border, finder)
+    zones = _finder_zones(n)
+    finder_mask = Image.new("L", (side, side), 0)
+    if finder_fg:
+        finder_painter = ImageDraw.Draw(finder_mask)
+    else:
+        finder_painter = painter
+    for top, left in zones:
+        _draw_finder(finder_painter, top, left, box, border, finder)
 
     if gradient:
         fill = _gradient(side, _color(fg, "#000000"), _color(gradient_end, "#3B82F6"))
@@ -158,6 +177,10 @@ def render(data, size=None, box_size=None, border=4, ec="M", style="Square", fin
 
     base = Image.new("RGBA", (side, side), (0, 0, 0, 0) if transparent else _color(bg, "#FFFFFF") + (255,))
     base.paste(fill, (0, 0), mask)
+
+    if finder_fg:
+        eyes = Image.new("RGBA", (side, side), _color(finder_fg, "#000000") + (255,))
+        base.paste(eyes, (0, 0), finder_mask)
 
     if logo_path and os.path.isfile(logo_path):
         base = _add_logo(base, logo_path, "#FFFFFF" if transparent else bg)
@@ -193,6 +216,16 @@ def _svg_module(matrix, r, c, n, style):
     x, y = c, r
     if style == "Dots":
         return f'<circle cx="{x + 0.5:g}" cy="{y + 0.5:g}" r="0.5"/>'
+    if style == "Diamond":
+        return f'<path d="M{x + 0.5:g} {y:g}L{x + 1:g} {y + 0.5:g}L{x + 0.5:g} {y + 1:g}L{x:g} {y + 0.5:g}Z"/>'
+    if style == "Star":
+        cx, cy = x + 0.5, y + 0.5
+        points = []
+        for step in range(10):
+            angle = -math.pi / 2 + step * math.pi / 5
+            radius = 0.5 if step % 2 == 0 else 0.22
+            points.append(f"{cx + radius * math.cos(angle):.3f},{cy + radius * math.sin(angle):.3f}")
+        return f'<polygon points="{" ".join(points)}"/>'
     if style == "Rounded":
         return f'<path d="{_svg_rect(x, y, 1, 1, 0.30)}"/>'
     if style == "Classy":
@@ -223,7 +256,7 @@ def _svg_finder(top, left, style):
 
 def render_svg(data, path, size=None, box_size=None, border=4, ec="M", style="Square",
                finder="Square", fg="#000000", bg="#FFFFFF", gradient=False,
-               gradient_end="#3B82F6", transparent=False, logo_path=None):
+               gradient_end="#3B82F6", transparent=False, logo_path=None, finder_fg=None):
     matrix = _matrix(data, ec)
     n = len(matrix)
     border = max(0, _as_int(border, 4))
@@ -256,6 +289,9 @@ def render_svg(data, path, size=None, box_size=None, border=4, ec="M", style="Sq
         for c in range(n):
             if matrix[r][c] and not _in_finders(r, c, n):
                 parts.append(_svg_module(matrix, r, c, n, style))
+    parts.append("</g>")
+    eyes = _hex(finder_fg, "#000000") if finder_fg else foreground
+    parts.append(f'<g fill="{eyes}" transform="translate({border} {border})">')
     for top, left in _finder_zones(n):
         parts.append(_svg_finder(top, left, finder))
     parts.append("</g></svg>")
@@ -263,3 +299,48 @@ def render_svg(data, path, size=None, box_size=None, border=4, ec="M", style="Sq
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("".join(parts))
     return path
+
+
+def icon_image(name, size=256):
+    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    ink = (17, 24, 39, 255)
+    white = (255, 255, 255, 255)
+    s = size
+    if name == "Wi-Fi":
+        cx, cy = s / 2, s * 0.80
+        for radius in (s * 0.34, s * 0.56, s * 0.78):
+            draw.arc([cx - radius, cy - radius, cx + radius, cy + radius], 210, 330,
+                     fill=ink, width=max(2, int(s * 0.075)))
+        dot = s * 0.08
+        draw.ellipse([cx - dot, cy - dot, cx + dot, cy + dot], fill=ink)
+    elif name == "Mail":
+        left, top, right, bottom = s * 0.16, s * 0.30, s * 0.84, s * 0.70
+        draw.rounded_rectangle([left, top, right, bottom], radius=s * 0.05,
+                               outline=ink, width=max(2, int(s * 0.06)))
+        draw.line([left + s * 0.04, top + s * 0.04, s / 2, s * 0.54, right - s * 0.04, top + s * 0.04],
+                  fill=ink, width=max(2, int(s * 0.06)))
+    elif name == "Cart":
+        draw.line([s * 0.10, s * 0.20, s * 0.22, s * 0.20, s * 0.34, s * 0.58],
+                  fill=ink, width=max(2, int(s * 0.07)))
+        draw.rounded_rectangle([s * 0.28, s * 0.30, s * 0.92, s * 0.58], radius=s * 0.05,
+                               outline=ink, width=max(2, int(s * 0.06)))
+        for cx in (s * 0.42, s * 0.76):
+            radius = s * 0.065
+            draw.ellipse([cx - radius, s * 0.72 - radius, cx + radius, s * 0.72 + radius], fill=ink)
+    elif name == "Location":
+        cx, cy, r = s / 2, s * 0.40, s * 0.26
+        draw.polygon([(cx - r * 0.7, cy + r * 0.6), (cx + r * 0.7, cy + r * 0.6), (cx, s * 0.88)], fill=ink)
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=ink)
+        hole = r * 0.38
+        draw.ellipse([cx - hole, cy - hole, cx + hole, cy + hole], fill=(0, 0, 0, 0))
+    elif name == "Link":
+        draw.rounded_rectangle([s * 0.14, s * 0.40, s * 0.58, s * 0.60], radius=s * 0.10,
+                               outline=ink, width=max(2, int(s * 0.07)))
+        draw.rounded_rectangle([s * 0.42, s * 0.40, s * 0.86, s * 0.60], radius=s * 0.10,
+                               outline=ink, width=max(2, int(s * 0.07)))
+    elif name == "Info":
+        draw.ellipse([s * 0.12, s * 0.12, s * 0.88, s * 0.88], fill=ink)
+        draw.ellipse([s * 0.43, s * 0.24, s * 0.57, s * 0.38], fill=white)
+        draw.rectangle([s * 0.43, s * 0.46, s * 0.57, s * 0.76], fill=white)
+    return image

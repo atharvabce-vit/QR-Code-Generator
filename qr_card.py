@@ -42,7 +42,7 @@ def _wrap(draw, text, font, max_width, max_lines):
     return lines[:max_lines]
 
 
-def render_qr_card(title, qr_image, content, caption="", accent=ACCENT):
+def render_qr_card(title, qr_image, content, caption="", accent=ACCENT, frame=""):
     width = 720
     header_h = 60
     qr_y = 88
@@ -57,7 +57,9 @@ def render_qr_card(title, qr_image, content, caption="", accent=ACCENT):
         qr_image = flattened
 
     info_y = qr_y + qr_image.height + 28
-    height = info_y + 200
+    box_bottom = info_y + 200
+    band_h = 64 if frame else 0
+    height = box_bottom + band_h
 
     card = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(card)
@@ -73,11 +75,15 @@ def render_qr_card(title, qr_image, content, caption="", accent=ACCENT):
         draw.text((width // 2, info_y - 8), caption, font=_font(15, True), fill=VALUE, anchor="ma")
 
     box_top = info_y + 22
-    draw.rectangle([24, box_top, width - 24, height - 24], fill=PANEL, outline=BORDER)
+    draw.rectangle([24, box_top, width - 24, box_bottom - 24], fill=PANEL, outline=BORDER)
     draw.text((40, box_top + 14), "ENCODED CONTENT", font=_font(12), fill=LABEL)
     y = box_top + 38
     for line in _wrap(draw, content, _font(15), width - 80, 6):
         draw.text((40, y), line, font=_font(15), fill=VALUE)
         y += 22
+
+    if frame:
+        draw.rectangle([0, box_bottom, width - 1, height - 1], fill=accent)
+        draw.text((width // 2, box_bottom + band_h // 2), frame, font=_font(24, True), fill="white", anchor="mm")
 
     return card
