@@ -9,6 +9,11 @@ import qrcode
 import qrcode.image.svg
 from PIL import Image, ImageTk
 
+import qr_dynamic
+import qr_io
+import qr_payload
+import qr_style
+
 
 def make_qr_image(data, box_size=10, border=4):
     qr = qrcode.QRCode(
@@ -180,7 +185,41 @@ def build_parser():
     parser.add_argument("--column", help="CSV column to encode (default: first column)")
     parser.add_argument("--outdir", help="Output folder for batch mode (default: qr_output)")
     parser.add_argument("--box-size", type=int, default=10, help="Pixel size of each QR module (default: 10)")
+    parser.add_argument("--border", type=int, default=4, help="Quiet zone in modules (default: 4)")
+    parser.add_argument("--ec", default="M", choices=["L", "M", "Q", "H"], help="Error correction level")
+    parser.add_argument("--style", default="Square",
+                        choices=["Square", "Rounded", "Dots", "Classy", "Diamond", "Star"],
+                        help="Module style")
+    parser.add_argument("--finder", default="Square", choices=["Square", "Rounded", "Circle"],
+                        help="Finder (eye) style")
+    parser.add_argument("--finder-fg", help="Finder (eye) colour, e.g. #0B5CFF")
+    parser.add_argument("--fg", default="#000000", help="Foreground colour")
+    parser.add_argument("--bg", default="#FFFFFF", help="Background colour")
+    parser.add_argument("--sign", action="store_true", help="Add an HMAC signature to the payload")
+    parser.add_argument("--detect", action="store_true", help="Auto-detect the payload type and rebuild it")
+    parser.add_argument("--zip", action="store_true", help="Zip the batch output folder")
+    parser.add_argument("--dynamic", action="store_true", help="Create a short link and encode that instead")
+    parser.add_argument("--label", help="Label for a dynamic link")
+    parser.add_argument("--base", help="Base URL of the short-link server (default: LAN IP)")
+    parser.add_argument("--port", type=int, default=8080, help="Short-link server port (default: 8080)")
     return parser
+
+
+def single_payload(args):
+    content = args.text
+    if args.detect:
+        kind, values = qr_payload.detect(content)
+        content = qr_payload.build(kind, values)
+        print(f"Detected type: {kind}")
+    if args.sign:
+        content = qr_payload.sign(content)
+    if args.dynamic:
+        code = qr_dynamic.add_link(content, args.label or "cli")
+        base = args.base or f"http://{qr_dynamic.local_ip()}:{args.port}"
+        short = f"{base.rstrip('/')}/r/{code}"
+        print(f"Dynamic link: {short}")
+        content = short
+    return content
 
 
 def main():
@@ -188,13 +227,28 @@ def main():
     args = parser.parse_args()
 
     if args.csv:
-        count, column = run_batch(args.csv, args.outdir or "qr_output", args.column, args.box_size)
-        print(f"Generated {count} QR code(s) from column '{column}' into '{args.outdir or 'qr_output'}'.")
+        out_dir = args.outdir or "qr_output"
+        count, column = run_batch(args.csv, out_dir, args.column, args.box_size)
+        print(f"Generated {count} QR code(s) from column '{column}' into '{out_dir}'.")
+        if args.zip:
+            print(f"ZIP archive: {qr_io.zip_folder(out_dir)}")
     elif args.text:
+        content = single_payload(args)
+        options = {
+            "box_size": args.box_size,
+            "border": args.border,
+            "ec": args.ec,
+            "style": args.style,
+            "finder": args.finder,
+            "finder_fg": args.finder_fg,
+            "fg": args.fg,
+            "bg": args.bg,
+        }
         if args.svg:
-            path = save_qr_svg(args.text, args.output or "qr.svg")
+            path = qr_style.render_svg(content, args.output or "qr.svg", **options)
         else:
-            path = save_qr(args.text, args.output or "qr.png", args.box_size)
+            path = args.output or "qr.png"
+            qr_style.render(content, **options).save(path)
         print(f"Saved QR code to: {path}")
     else:
         run_gui()
