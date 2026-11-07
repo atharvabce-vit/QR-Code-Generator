@@ -1,8 +1,113 @@
 import hashlib
 import hmac
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote
 
 SIGNING_KEY = "change-this-shared-secret"
+
+WIFI_SPECIALS = "\\;,:\""
+
+
+def _escape_wifi(value):
+    out = []
+    for ch in str(value or ""):
+        if ch in WIFI_SPECIALS:
+            out.append("\\")
+        out.append(ch)
+    return "".join(out)
+
+
+def _unescape(value):
+    out = []
+    escaped = False
+    for ch in str(value or ""):
+        if escaped:
+            out.append(ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        else:
+            out.append(ch)
+    if escaped:
+        out.append("\\")
+    return "".join(out)
+
+
+def _split_escaped(text, separator):
+    parts = []
+    current = []
+    escaped = False
+    for ch in text:
+        if escaped:
+            current.append(ch)
+            escaped = False
+        elif ch == "\\":
+            current.append(ch)
+            escaped = True
+        elif ch == separator:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def _first_unescaped(text, char):
+    escaped = False
+    for index, ch in enumerate(text):
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == char:
+            return index
+    return -1
+
+
+def _escape_text(value):
+    text = str(value or "")
+    text = text.replace("\\", "\\\\")
+    text = text.replace(";", "\\;").replace(",", "\\,")
+    text = text.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
+    return text
+
+
+def _take_bytes(text, limit):
+    total = 0
+    for index, ch in enumerate(text):
+        size = len(ch.encode("utf-8"))
+        if total + size > limit:
+            return text[:index], text[index:]
+        total += size
+    return text, ""
+
+
+def _fold(lines, limit=75):
+    folded = []
+    for line in lines:
+        prefix = ""
+        remaining = line
+        while True:
+            room = limit - len(prefix.encode("utf-8"))
+            chunk, remaining = _take_bytes(remaining, room)
+            folded.append(prefix + chunk)
+            if not remaining:
+                break
+            prefix = " "
+    return "\r\n".join(folded)
+
+
+def _digest(*parts):
+    joined = "\u0000".join(str(part or "") for part in parts)
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:16]
+
+
+def _utc_time(value):
+    text = str(value or "").strip()
+    if not text or text.endswith("Z"):
+        return text
+    return text + "Z"
 
 
 def build(kind, values):
@@ -28,40 +133,58 @@ def build(kind, values):
         return f"tel:{get('number')}"
 
     if kind == "SMS":
-        return f"SMSTO:{get('number')}:{get('message')}"
+        number, message = get("number"), get("message")
+        if (get("scheme") or "SMSTO").lower() == "sms":
+            suffix = f"?body={quote(message)}" if message else ""
+            return f"sms:{number}{suffix}"
+        return f"SMSTO:{number}:{message}"
 
     if kind == "Wi-Fi":
         security = get("security") or "WPA"
         hidden = "true" if get("hidden").lower() in ("yes", "true", "1") else "false"
-        return f"WIFI:T:{security};S:{get('ssid')};P:{get('password')};H:{hidden};;"
+        ssid = _escape_wifi(get("ssid"))
+        password = _escape_wifi(get("password"))
+        return f"WIFI:T:{security};S:{ssid};P:{password};H:{hidden};;"
 
     if kind == "Contact":
-        lines = ["BEGIN:VCARD", "VERSION:3.0", f"N:{get('name')}", f"FN:{get('name')}"]
+        name = get("name")
+        tokens = name.split()
+        if len(tokens) > 1:
+            family, given = tokens[-1], " ".join(tokens[:-1])
+        else:
+            family, given = "", name
+        lines = [
+            "BEGIN:VCARD",
+            "VERSION:3.0",
+            f"N:{_escape_text(family)};{_escape_text(given)};;;",
+            f"FN:{_escape_text(name)}",
+        ]
         if get("org"):
-            lines.append(f"ORG:{get('org')}")
+            lines.append(f"ORG:{_escape_text(get('org'))}")
         if get("title"):
-            lines.append(f"TITLE:{get('title')}")
+            lines.append(f"TITLE:{_escape_text(get('title'))}")
         if get("phone"):
-            lines.append(f"TEL:{get('phone')}")
+            lines.append(f"TEL:{_escape_text(get('phone'))}")
         if get("email"):
-            lines.append(f"EMAIL:{get('email')}")
+            lines.append(f"EMAIL:{_escape_text(get('email'))}")
         if get("website"):
-            lines.append(f"URL:{get('website')}")
+            lines.append(f"URL:{_escape_text(get('website'))}")
         if get("address"):
-            lines.append(f"ADR:;;{get('address')};;;;")
+            lines.append(f"ADR:;;{_escape_text(get('address'))};;;;")
         if get("notes"):
-            lines.append(f"NOTE:{get('notes')}")
+            lines.append(f"NOTE:{_escape_text(get('notes'))}")
+        lines.append(f"UID:{_digest('vcard', name, get('email'), get('phone'))}@qrcode")
         lines.append("END:VCARD")
-        return "\n".join(lines)
+        return _fold(lines)
 
     if kind == "UPI Payment":
         params = [("pa", get("pa")), ("pn", get("pn"))]
+        if get("tn"):
+            params.append(("tn", get("tn")))
         if get("am"):
             params.append(("am", get("am")))
         params.append(("cu", "INR"))
-        if get("tn"):
-            params.append(("tn", get("tn")))
-        query = "&".join(f"{key}={quote(value)}" for key, value in params if value)
+        query = "&".join(f"{key}={quote(value, safe='@')}" for key, value in params if value)
         return f"upi://pay?{query}"
 
     if kind == "Location":
@@ -70,17 +193,29 @@ def build(kind, values):
         return f"geo:{coords}?q={coords}({quote(label)})" if label else f"geo:{coords}"
 
     if kind == "Event":
-        lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT", f"SUMMARY:{get('title')}"]
+        start = _utc_time(get("start"))
+        end = _utc_time(get("end"))
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        uid = f"{_digest('event', get('title'), get('location'), start, end)}@qrcode"
+        lines = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//QR Code Generator//EN",
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{stamp}",
+            f"SUMMARY:{_escape_text(get('title'))}",
+        ]
         if get("location"):
-            lines.append(f"LOCATION:{get('location')}")
-        if get("start"):
-            lines.append(f"DTSTART:{get('start')}")
-        if get("end"):
-            lines.append(f"DTEND:{get('end')}")
+            lines.append(f"LOCATION:{_escape_text(get('location'))}")
+        if start:
+            lines.append(f"DTSTART:{start}")
+        if end:
+            lines.append(f"DTEND:{end}")
         if get("description"):
-            lines.append(f"DESCRIPTION:{get('description')}")
+            lines.append(f"DESCRIPTION:{_escape_text(get('description'))}")
         lines.extend(["END:VEVENT", "END:VCALENDAR"])
-        return "\n".join(lines)
+        return _fold(lines)
 
     if kind == "WhatsApp":
         number = "".join(ch for ch in get("number") if ch.isdigit())
@@ -158,10 +293,11 @@ def detect(text):
 
     if low.startswith("wifi:"):
         parts = {}
-        for chunk in text[5:].split(";"):
-            if ":" in chunk:
-                key, value = chunk.split(":", 1)
-                parts[key.upper()] = value
+        for chunk in _split_escaped(text[5:], ";"):
+            index = _first_unescaped(chunk, ":")
+            if index == -1:
+                continue
+            parts[chunk[:index].strip().upper()] = _unescape(chunk[index + 1:])
         return "Wi-Fi", {
             "ssid": parts.get("S", ""),
             "password": parts.get("P", ""),
@@ -182,7 +318,12 @@ def detect(text):
 
     if low.startswith("smsto:"):
         number, _, message = text[6:].partition(":")
-        return "SMS", {"number": number, "message": message}
+        return "SMS", {"number": number, "message": message, "scheme": "SMSTO"}
+
+    if low.startswith("sms:"):
+        number, _, query = text[4:].partition("?")
+        message = parse_qs(query).get("body", [""])[0] if query else ""
+        return "SMS", {"number": number, "message": message, "scheme": "sms"}
 
     if low.startswith("upi://"):
         query = _query(text)

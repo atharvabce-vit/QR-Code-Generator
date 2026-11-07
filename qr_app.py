@@ -79,6 +79,7 @@ FIELD_DEFS = {
     ],
     "Phone": [("number", "Phone number", "entry", "+91 99999 99999")],
     "SMS": [
+        ("scheme", "Scheme", "choice", "SMSTO", ["SMSTO", "sms"]),
         ("number", "Phone number", "entry", "+91 99999 99999"),
         ("message", "Message", "text", ""),
     ],
@@ -116,8 +117,8 @@ FIELD_DEFS = {
     "Event": [
         ("title", "Event title", "entry", "Team meeting"),
         ("location", "Location", "entry", ""),
-        ("start", "Start (YYYYMMDDTHHMMSS)", "entry", "20261106T100000"),
-        ("end", "End (YYYYMMDDTHHMMSS)", "entry", "20261106T110000"),
+        ("start", "Start (YYYYMMDDTHHMMSS, UTC)", "entry", "20261106T100000"),
+        ("end", "End (YYYYMMDDTHHMMSS, UTC)", "entry", "20261106T110000"),
         ("description", "Details", "text", ""),
     ],
     "Crypto": [
