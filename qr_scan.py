@@ -1,3 +1,5 @@
+import os
+
 from PIL import Image
 
 import qr_payload
@@ -51,6 +53,31 @@ def _decode(array):
 def decode_image(path):
     _require()
     return _decode(_to_bgr(Image.open(path)))
+
+
+def decode_clipboard():
+    _require()
+    from PIL import ImageGrab
+
+    grabbed = ImageGrab.grabclipboard()
+    if not isinstance(grabbed, Image.Image):
+        return None
+    return _decode(_to_bgr(grabbed))
+
+
+def scan_folder(folder):
+    _require()
+    extensions = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff")
+    results = []
+    for name in sorted(os.listdir(folder)):
+        if os.path.splitext(name)[1].lower() not in extensions:
+            continue
+        try:
+            text = decode_image(os.path.join(folder, name))
+        except Exception:
+            text = None
+        results.append((name, text))
+    return results
 
 
 def decode_frame(frame):

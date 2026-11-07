@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import os
+import zipfile
 from io import BytesIO
 
 PREFERRED_COLUMNS = ("content", "text", "value", "data", "url", "qr")
@@ -111,4 +112,23 @@ def export_pdf(cards, path):
         canvas.drawImage(ImageReader(buffer), margin, y - draw_height, width=draw_width, height=draw_height)
         y -= draw_height + gap
     canvas.save()
+    return path
+
+
+def zip_folder(folder, path=None):
+    if path is None:
+        path = folder.rstrip("\\/") + ".zip"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in sorted(os.listdir(folder)):
+            full = os.path.join(folder, name)
+            if os.path.isfile(full):
+                archive.write(full, name)
+    return path
+
+
+def write_rows(path, header, rows):
+    with open(path, "w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        writer.writerows(rows)
     return path
