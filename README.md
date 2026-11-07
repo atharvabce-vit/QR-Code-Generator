@@ -7,7 +7,7 @@ The GUI lives in `qr_app.py`; the work is split across small modules (`qr_payloa
 ## Features
 
 ### Content types
-Text, URL, Email, Phone, SMS, Wi-Fi, Contact (vCard), UPI Payment, WhatsApp, Location, Event (iCalendar), Crypto, Social, App Store and Smart Link. Each type has its own fields, and **Quick paste** auto-detects the type from a pasted link, email, phone number, Wi-Fi string, etc.
+Text, URL, Email, Phone, SMS (with a `SMSTO` / `sms` scheme choice), Wi-Fi, Contact (vCard), UPI Payment, WhatsApp, Location, Event (iCalendar), Crypto, Social, App Store and Smart Link. Each type has its own fields, and **Quick paste** auto-detects the type from a pasted link, email, phone number, Wi-Fi string, etc.
 
 ### Appearance
 - Error correction level L / M / Q / H
@@ -18,6 +18,7 @@ Text, URL, Email, Phone, SMS, Wi-Fi, Contact (vCard), UPI Payment, WhatsApp, Loc
 - Transparent background
 - Adjustable quiet zone and module size
 - Center logo with an automatic rounded plate (raises error correction to H)
+- Optional caption rendered under the QR code on the card
 
 ### Export
 - Raster: PNG, JPEG, WebP with a configurable DPI
@@ -31,7 +32,7 @@ Import a CSV or Excel file, pick the column to encode, then generate numbered PN
 
 ### Scan & verify
 - Decode a QR code from an image file
-- Live webcam scanning (OpenCV)
+- Live webcam scanning (OpenCV) with a selectable camera index
 - HMAC signature check to detect tampering
 - Load a scanned payload back into the matching form fields (reverse of Quick paste)
 - Scannability check (quiet zone, module size, contrast, inversion, round-trip decode)
