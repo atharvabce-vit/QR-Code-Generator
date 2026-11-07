@@ -120,8 +120,10 @@ def build(kind, values):
         return get("url")
 
     if kind == "Email":
-        to, subject, body = get("to"), get("subject"), get("body")
+        to, cc, subject, body = get("to"), get("cc"), get("subject"), get("body")
         params = []
+        if cc:
+            params.append("cc=" + quote(cc))
         if subject:
             params.append("subject=" + quote(subject))
         if body:
@@ -260,8 +262,39 @@ def build(kind, values):
             "Zoom": "https://zoom.us/j/",
             "Spotify": "https://open.spotify.com/",
             "YouTube": "https://www.youtube.com/watch?v=",
+            "Google Meet": "https://meet.google.com/",
+            "Discord": "https://discord.gg/",
         }.get(get("service") or "Telegram", "https://t.me/")
         return base + value
+
+    if kind == "Maps":
+        destination = quote(get("destination"))
+        origin = quote(get("origin"))
+        url = f"https://www.google.com/maps/dir/?api=1&destination={destination}&travelmode={get('mode') or 'driving'}"
+        if origin:
+            url += f"&origin={origin}"
+        return url
+
+    if kind == "PayPal":
+        handle = get("handle")
+        if handle.startswith("http"):
+            return handle
+        link = "https://paypal.me/" + handle.lstrip("@").strip("/")
+        if get("amount"):
+            link += f"/{get('amount')}{get('currency') or 'USD'}"
+        return link
+
+    if kind == "MECARD":
+        parts = [f"MECARD:N:{_escape_text(get('name'))}"]
+        if get("phone"):
+            parts.append(f"TEL:{_escape_text(get('phone'))}")
+        if get("email"):
+            parts.append(f"EMAIL:{_escape_text(get('email'))}")
+        if get("org"):
+            parts.append(f"ORG:{_escape_text(get('org'))}")
+        if get("url"):
+            parts.append(f"URL:{_escape_text(get('url'))}")
+        return ";".join(parts) + ";;"
 
     return get("text")
 
@@ -309,6 +342,7 @@ def detect(text):
         query = _query(text)
         return "Email", {
             "to": text[7:].split("?", 1)[0],
+            "cc": query.get("cc", [""])[0],
             "subject": query.get("subject", [""])[0],
             "body": query.get("body", [""])[0],
         }
@@ -350,6 +384,24 @@ def detect(text):
         number, _, query = text.split("wa.me/", 1)[1].partition("?")
         message = parse_qs(query).get("text", [""])[0] if query else ""
         return "WhatsApp", {"number": "".join(ch for ch in number if ch.isdigit()), "message": message}
+
+    if low.startswith("mecard:"):
+        parts = {}
+        for chunk in text[7:].split(";"):
+            key, _, value = chunk.partition(":")
+            if key.strip():
+                parts[key.strip().upper()] = _unescape(value)
+        return "MECARD", {
+            "name": parts.get("N", ""),
+            "phone": parts.get("TEL", ""),
+            "email": parts.get("EMAIL", ""),
+            "org": parts.get("ORG", ""),
+            "url": parts.get("URL", ""),
+        }
+
+    if "paypal.me/" in low:
+        handle = text.split("paypal.me/", 1)[1].split("?", 1)[0]
+        return "PayPal", {"handle": handle, "amount": "", "currency": "USD"}
 
     if low.startswith("http://") or low.startswith("https://"):
         return "URL", {"url": text}
