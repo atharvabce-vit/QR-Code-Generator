@@ -1,10 +1,12 @@
 import json
 import os
+import tempfile
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 from PIL import Image
 
+import qr_dynamic
 import qr_export
 import qr_io
 import qr_payload
@@ -65,14 +67,22 @@ TYPES = [
     "Crypto",
     "Social",
     "App Store",
+    "Maps",
+    "PayPal",
+    "MECARD",
     "Smart Link",
 ]
+
+MODULE_STYLES = ["Square", "Rounded", "Dots", "Classy", "Diamond", "Star"]
+ICON_NAMES = ["None", "Wi-Fi", "Mail", "Cart", "Location", "Link", "Info"]
+FRAME_NAMES = ["None", "SCAN ME", "SCAN TO PAY", "SCAN FOR MENU", "SCAN TO CONNECT"]
 
 FIELD_DEFS = {
     "Text": [("text", "Text or message", "text", "Hello from a QR code")],
     "URL": [("url", "Link / URL", "entry", "https://example.com")],
     "Email": [
         ("to", "Recipient email", "entry", "hello@example.com"),
+        ("cc", "CC (optional)", "entry", ""),
         ("subject", "Subject", "entry", "Hello"),
         ("body", "Message", "text", ""),
     ],
@@ -135,8 +145,26 @@ FIELD_DEFS = {
         ("app", "Package name / app ID (or full URL)", "entry", "com.example.app"),
     ],
     "Smart Link": [
-        ("service", "Service", "choice", "Telegram", ["Telegram", "Zoom", "Spotify", "YouTube"]),
+        ("service", "Service", "choice", "Telegram",
+         ["Telegram", "Zoom", "Spotify", "YouTube", "Google Meet", "Discord"]),
         ("value", "Link or ID", "entry", ""),
+    ],
+    "Maps": [
+        ("destination", "Destination (place or address)", "entry", "Eiffel Tower"),
+        ("origin", "Start (optional)", "entry", ""),
+        ("mode", "Travel mode", "choice", "driving", ["driving", "walking", "bicycling", "transit"]),
+    ],
+    "PayPal": [
+        ("handle", "PayPal.Me handle (or full link)", "entry", "yourname"),
+        ("amount", "Amount (optional)", "entry", ""),
+        ("currency", "Currency", "choice", "USD", ["USD", "EUR", "GBP", "INR", "AUD", "CAD"]),
+    ],
+    "MECARD": [
+        ("name", "Full name", "entry", "A. Sharma"),
+        ("phone", "Phone", "entry", "+91 99999 99999"),
+        ("email", "Email", "entry", "hello@example.com"),
+        ("org", "Company", "entry", ""),
+        ("url", "Website", "entry", ""),
     ],
 }
 
@@ -158,6 +186,9 @@ class QRApp(_Window):
         self.camera = None
         self.history = []
         self.preview_job = None
+        self.server = None
+        self.server_thread = None
+        self.db_path = qr_dynamic.DB_PATH
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -207,6 +238,10 @@ class QRApp(_Window):
         self.caption_entry = ctk.CTkEntry(panel, placeholder_text="Shown under the QR code")
         self.caption_entry.pack(fill="x")
 
+        ctk.CTkLabel(panel, text="Frame label", anchor="w").pack(fill="x", pady=(8, 0))
+        self.frame_var = ctk.StringVar(value="None")
+        ctk.CTkOptionMenu(panel, values=FRAME_NAMES, variable=self.frame_var).pack(fill="x")
+
         self.sign_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(panel, text="Add HMAC signature (tamper check)", variable=self.sign_var).pack(
             fill="x", pady=(12, 0)
@@ -220,11 +255,15 @@ class QRApp(_Window):
 
         ctk.CTkLabel(panel, text="Module style", anchor="w").pack(fill="x", pady=(8, 0))
         self.style_var = ctk.StringVar(value="Square")
-        ctk.CTkOptionMenu(panel, values=["Square", "Rounded", "Dots", "Classy"], variable=self.style_var).pack(fill="x")
+        ctk.CTkOptionMenu(panel, values=MODULE_STYLES, variable=self.style_var).pack(fill="x")
 
         ctk.CTkLabel(panel, text="Finder (eyes) style", anchor="w").pack(fill="x", pady=(8, 0))
         self.finder_var = ctk.StringVar(value="Square")
         ctk.CTkOptionMenu(panel, values=["Square", "Rounded", "Circle"], variable=self.finder_var).pack(fill="x")
+
+        ctk.CTkLabel(panel, text="Finder (eyes) color (blank = foreground)", anchor="w").pack(fill="x", pady=(8, 0))
+        self.finder_fg_entry = ctk.CTkEntry(panel, placeholder_text="#0B5CFF")
+        self.finder_fg_entry.pack(fill="x")
 
         ctk.CTkLabel(panel, text="Foreground color", anchor="w").pack(fill="x", pady=(8, 0))
         self.fg_entry = ctk.CTkEntry(panel, placeholder_text="#000000")
@@ -259,6 +298,10 @@ class QRApp(_Window):
         self.box_entry.pack(fill="x")
 
         ctk.CTkLabel(panel, text="Center logo", anchor="w").pack(fill="x", pady=(10, 0))
+        ctk.CTkLabel(panel, text="Built-in logo icon", anchor="w").pack(fill="x", pady=(6, 0))
+        self.icon_var = ctk.StringVar(value="None")
+        ctk.CTkOptionMenu(panel, values=ICON_NAMES, variable=self.icon_var,
+                          command=self.choose_builtin_logo).pack(fill="x")
         ctk.CTkButton(panel, text="Choose logo image", command=self.choose_logo).pack(fill="x", pady=(6, 0))
         self.logo_label = ctk.CTkLabel(panel, text="No logo selected", anchor="w", text_color="#6B7280")
         self.logo_label.pack(fill="x")
@@ -309,20 +352,38 @@ class QRApp(_Window):
         self.camera_entry.pack(fill="x")
 
         ctk.CTkButton(panel, text="Scan QR from image file", command=self.scan_image).pack(fill="x", pady=(10, 4))
+        ctk.CTkButton(panel, text="Scan image from clipboard", command=self.scan_clipboard).pack(fill="x", pady=4)
+        ctk.CTkButton(panel, text="Batch: scan folder to CSV", command=self.batch_scan_folder).pack(fill="x", pady=4)
         self.webcam_button = ctk.CTkButton(panel, text="Start webcam scan", command=self.webcam_scan)
         self.webcam_button.pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Check signature of payload", command=self.check_signature).pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Load decoded payload into form", command=self.load_scanned).pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Check scannability", command=self.check_scannability).pack(fill="x", pady=(4, 12))
 
+        ctk.CTkLabel(panel, text="Dynamic links (editable short URLs)", anchor="w").pack(fill="x", pady=(24, 0))
+        ctk.CTkLabel(panel, text="Server address", anchor="w").pack(fill="x", pady=(8, 0))
+        self.base_entry = ctk.CTkEntry(panel, placeholder_text="http://192.168.1.5:8080")
+        self.base_entry.insert(0, f"http://{qr_dynamic.local_ip()}:8080")
+        self.base_entry.pack(fill="x")
+
+        ctk.CTkLabel(panel, text="Port", anchor="w").pack(fill="x", pady=(8, 0))
+        self.port_entry = ctk.CTkEntry(panel, placeholder_text="8080")
+        self.port_entry.insert(0, "8080")
+        self.port_entry.pack(fill="x")
+
+        self.server_button = ctk.CTkButton(panel, text="Start short-link server", command=self.toggle_server)
+        self.server_button.pack(fill="x", pady=(10, 4))
+        ctk.CTkButton(panel, text="Create dynamic link from content", command=self.create_dynamic).pack(fill="x", pady=4)
+        ctk.CTkButton(panel, text="Manage links & analytics", command=self.open_dynamic_manager).pack(fill="x", pady=(4, 12))
+
         self._connect_live()
 
     def _connect_live(self):
         for entry in (self.caption_entry, self.fg_entry, self.bg_entry, self.gradient_end_entry,
-                      self.border_entry, self.box_entry):
+                      self.finder_fg_entry, self.border_entry, self.box_entry):
             entry.bind("<KeyRelease>", self._schedule_preview)
         for var in (self.ec_var, self.style_var, self.finder_var, self.gradient_var,
-                    self.transparent_var, self.sign_var):
+                    self.transparent_var, self.sign_var, self.frame_var):
             var.trace_add("write", self._schedule_preview)
 
     def _build_preview(self):
@@ -417,6 +478,7 @@ class QRApp(_Window):
             "ec": self.ec_var.get(),
             "style": self.style_var.get(),
             "finder": self.finder_var.get(),
+            "finder_fg": self.finder_fg_entry.get().strip() or None,
             "fg": self.fg_entry.get(),
             "bg": self.bg_entry.get(),
             "gradient": self.gradient_var.get(),
@@ -451,11 +513,32 @@ class QRApp(_Window):
     def clear_logo(self):
         self.logo_path = None
         self.logo_label.configure(text="No logo selected")
+        self.icon_var.set("None")
         self.status.configure(text="Logo cleared")
+
+    def choose_builtin_logo(self, name):
+        if name == "None":
+            self.logo_path = None
+            self.logo_label.configure(text="No logo selected")
+            self._schedule_preview()
+            return
+        icon = qr_style.icon_image(name, 256)
+        path = os.path.join(tempfile.gettempdir(), f"qr_icon_{name.replace(' ', '_').lower()}.png")
+        icon.save(path)
+        self.logo_path = path
+        self.logo_label.configure(text=f"Built-in icon: {name}")
+        if self.ec_var.get() != "H":
+            self.ec_var.set("H")
+        self.status.configure(text=f"Built-in logo '{name}' set (error correction raised to H)")
+        self._schedule_preview()
 
     def _render(self, kind, content, caption=""):
         qr = qr_style.render(content, **self._appearance(size=300))
-        return render_qr_card(kind, qr, content, caption)
+        return render_qr_card(kind, qr, content, caption, frame=self._frame_label())
+
+    def _frame_label(self):
+        label = self.frame_var.get()
+        return "" if label == "None" else label
 
     def _show(self, card):
         if card is None:
@@ -618,6 +701,7 @@ class QRApp(_Window):
             "ec": self.ec_var.get(),
             "style": self.style_var.get(),
             "finder": self.finder_var.get(),
+            "finder_fg": self.finder_fg_entry.get(),
             "fg": self.fg_entry.get(),
             "bg": self.bg_entry.get(),
             "gradient": self.gradient_var.get(),
@@ -626,6 +710,7 @@ class QRApp(_Window):
             "border": self.border_entry.get(),
             "box": self.box_entry.get(),
             "caption": self.caption_entry.get(),
+            "frame": self.frame_var.get(),
             "sign": self.sign_var.get(),
             "theme": self.theme_var.get(),
         }
@@ -637,7 +722,8 @@ class QRApp(_Window):
                 var.set(data[key])
         for key, entry in (("fg", self.fg_entry), ("bg", self.bg_entry),
                            ("gradient_end", self.gradient_end_entry), ("border", self.border_entry),
-                           ("box", self.box_entry), ("caption", self.caption_entry)):
+                           ("box", self.box_entry), ("caption", self.caption_entry),
+                           ("finder_fg", self.finder_fg_entry)):
             if key in data:
                 entry.delete(0, "end")
                 if data[key]:
@@ -646,6 +732,8 @@ class QRApp(_Window):
                          ("sign", self.sign_var)):
             if key in data:
                 var.set(bool(data[key]))
+        if "frame" in data:
+            self.frame_var.set(data["frame"])
         ctk.set_appearance_mode(self.theme_var.get())
 
     def save_preset(self):
@@ -790,14 +878,19 @@ class QRApp(_Window):
             cards.append(card)
 
         qr_io.export_pdf(cards, os.path.join(out_dir, "qr_codes.pdf"))
+        archive = qr_io.zip_folder(out_dir)
         self.status.configure(text=f"Generated {len(cards)} QR code(s) from column '{column}'")
         messagebox.showinfo(
             "QR Code Generator",
-            f"Generated {len(cards)} QR PNG(s) and a combined PDF in:\n{out_dir}",
+            f"Generated {len(cards)} QR PNG(s), a combined PDF and a ZIP archive:\n{archive}",
         )
 
     def _on_close(self):
         self._stop_webcam()
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+            self.server = None
         self.destroy()
 
     def _load_result(self, text):
@@ -833,6 +926,41 @@ class QRApp(_Window):
             return
         self._load_result(text)
         self.status.configure(text=self._signature_message(text))
+
+    def scan_clipboard(self):
+        try:
+            text = qr_scan.decode_clipboard()
+        except Exception as error:
+            messagebox.showerror("QR Code Generator", f"Could not scan the clipboard:\n{error}")
+            return
+        if not text:
+            self._load_result("")
+            messagebox.showwarning("QR Code Generator", "No QR code was found on the clipboard.")
+            return
+        self._load_result(text)
+        self.status.configure(text=self._signature_message(text))
+
+    def batch_scan_folder(self):
+        folder = filedialog.askdirectory(title="Choose a folder of QR images")
+        if not folder:
+            return
+        try:
+            results = qr_scan.scan_folder(folder)
+        except Exception as error:
+            messagebox.showerror("QR Code Generator", f"Could not scan that folder:\n{error}")
+            return
+        if not results:
+            messagebox.showwarning("QR Code Generator", "No image files were found in that folder.")
+            return
+        out_path = os.path.join(folder, "scan_results.csv")
+        qr_io.write_rows(out_path, ["file", "decoded"], [[name, text or ""] for name, text in results])
+        found = sum(1 for _name, text in results if text)
+        self._load_result("\n".join(f"{name}: {text or '(no QR found)'}" for name, text in results))
+        self.status.configure(text=f"Scanned {len(results)} image(s), {found} decoded")
+        messagebox.showinfo(
+            "QR Code Generator",
+            f"Scanned {len(results)} image(s), {found} decoded.\nResults saved to:\n{out_path}",
+        )
 
     def webcam_scan(self):
         if self.camera is not None:
@@ -903,6 +1031,56 @@ class QRApp(_Window):
             return
         lines = "\n".join(f"- {line}" for line in result["messages"])
         messagebox.showwarning("Scannability check", f"{summary}\n\nWarnings:\n{lines}")
+
+    def toggle_server(self):
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+            self.server = None
+            self.server_thread = None
+            self.server_button.configure(text="Start short-link server")
+            self.status.configure(text="Short-link server stopped")
+            return
+        port = _as_int(self.port_entry.get(), 8080) or 8080
+        try:
+            server, thread = qr_dynamic.start_server(port, db_path=self.db_path)
+        except Exception as error:
+            messagebox.showerror("QR Code Generator", f"Could not start the server:\n{error}")
+            return
+        self.server = server
+        self.server_thread = thread
+        self.server_button.configure(text="Stop short-link server")
+        self.status.configure(text=f"Short-link server running on port {port}")
+
+    def create_dynamic(self):
+        kind, content = self._build_content()
+        if not content:
+            messagebox.showwarning("QR Code Generator", "Fill in the fields first.")
+            return
+        label = self.caption_entry.get().strip() or kind
+        code = qr_dynamic.add_link(content, label, self.db_path)
+        base = self.base_entry.get().strip().rstrip("/")
+        short = f"{base}/r/{code}"
+        self._apply_detected("URL", {"url": short})
+        self.status.configure(text=f"Dynamic link created: {short}")
+        messagebox.showinfo(
+            "QR Code Generator",
+            f"Dynamic link created:\n{short}\n\nIt currently points to:\n{content}",
+        )
+
+    def open_dynamic_manager(self):
+        links = qr_dynamic.list_links(self.db_path)
+        if not links:
+            messagebox.showinfo("Dynamic links", "No dynamic links have been created yet.")
+            return
+        base = self.base_entry.get().strip().rstrip("/")
+        lines = []
+        for link in links:
+            state = "on" if link["active"] else "off"
+            lines.append(f"{link['code']}  [{state}]  {link['scans']} scan(s)  ->  {link['target']}")
+            lines.append(f"    {base}/r/{link['code']}")
+        self._load_result("\n".join(lines))
+        self.status.configure(text=f"{len(links)} dynamic link(s)")
 
 
 def main():
