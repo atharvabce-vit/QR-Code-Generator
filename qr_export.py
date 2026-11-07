@@ -11,13 +11,16 @@ import qr_style
 
 CLIPBOARD_FILE = os.path.join(tempfile.gettempdir(), "qr_clipboard_image.png")
 
-WINDOWS_SCRIPT = (
-    "Add-Type -AssemblyName System.Windows.Forms;"
-    "Add-Type -AssemblyName System.Drawing;"
-    f"$img=[System.Drawing.Image]::FromFile('{CLIPBOARD_FILE}');"
-    "[System.Windows.Forms.Clipboard]::SetImage($img);"
-    "$img.Dispose()"
-)
+
+def _windows_script(path):
+    safe = path.replace("'", "''")
+    return (
+        "Add-Type -AssemblyName System.Windows.Forms;"
+        "Add-Type -AssemblyName System.Drawing;"
+        f"$img=[System.Drawing.Image]::FromFile('{safe}');"
+        "[System.Windows.Forms.Clipboard]::SetImage($img);"
+        "$img.Dispose()"
+    )
 
 
 def _rgb(text, fallback):
@@ -74,9 +77,15 @@ def save_vector(data, path, fmt, width_cm=5.0, ec="M", border=4, fg="#000000", b
 
 def copy_to_clipboard(image):
     image.convert("RGBA").save(CLIPBOARD_FILE)
-    subprocess.run(
-        ["powershell", "-NoProfile", "-STA", "-Command", WINDOWS_SCRIPT],
-        check=True,
-        capture_output=True,
-    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-Command", _windows_script(CLIPBOARD_FILE)],
+            check=True,
+            capture_output=True,
+        )
+    except FileNotFoundError as error:
+        raise RuntimeError("PowerShell was not found, so the image could not be copied.") from error
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or b"").decode("utf-8", "ignore").strip()
+        raise RuntimeError(detail or "PowerShell could not place the image on the clipboard.") from error
     return CLIPBOARD_FILE

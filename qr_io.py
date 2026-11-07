@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import os
 from io import BytesIO
 
@@ -7,14 +8,39 @@ PREFERRED_COLUMNS = ("content", "text", "value", "data", "url", "qr")
 
 def safe_name(text, limit=60):
     cleaned = "".join(ch if (ch.isalnum() or ch in "-_") else "_" for ch in text).strip("_")
-    return cleaned[:limit] or "qr"
+    if not cleaned:
+        return "qr"
+    if len(cleaned) > limit:
+        digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:6]
+        cleaned = f"{cleaned[:limit]}_{digest}"
+    return cleaned
+
+
+def _stable_header(names):
+    header = []
+    counts = {}
+    for index, name in enumerate(names):
+        label = str(name).strip() if name is not None else ""
+        if not label:
+            label = f"Column {index + 1}"
+        if label in counts:
+            counts[label] += 1
+            label = f"{label} ({counts[label]})"
+        else:
+            counts[label] = 0
+        header.append(label)
+    return header
 
 
 def _csv_rows(path):
     with open(path, newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        header = [name for name in (reader.fieldnames or []) if name]
-        rows = [dict(row) for row in reader]
+        records = list(csv.reader(handle))
+    if not records:
+        return [], []
+    header = _stable_header(records[0])
+    rows = []
+    for values in records[1:]:
+        rows.append({header[i]: (values[i] if i < len(values) else None) for i in range(len(header))})
     return rows, header
 
 
@@ -24,7 +50,10 @@ def _excel_rows(path):
     workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
     sheet = workbook.active
     values_iter = sheet.iter_rows(values_only=True)
-    header = [str(cell).strip() for cell in next(values_iter) if cell is not None]
+    first = next(values_iter, None)
+    if first is None:
+        return [], []
+    header = _stable_header(first)
     rows = []
     for values in values_iter:
         rows.append({header[i]: (values[i] if i < len(values) else None) for i in range(len(header))})

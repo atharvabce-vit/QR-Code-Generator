@@ -1,5 +1,6 @@
 import argparse
 import csv
+import hashlib
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -57,7 +58,12 @@ def render_square(data, target=280, border=4):
 
 def safe_name(text, limit=60):
     cleaned = "".join(ch if (ch.isalnum() or ch in "-_") else "_" for ch in text).strip("_")
-    return cleaned[:limit] or "qr"
+    if not cleaned:
+        return "qr"
+    if len(cleaned) > limit:
+        digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:6]
+        cleaned = f"{cleaned[:limit]}_{digest}"
+    return cleaned
 
 
 def run_batch(csv_path, out_dir, column, box_size):
