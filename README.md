@@ -21,7 +21,7 @@ Text, URL, Email, Phone, SMS, Wi-Fi, Contact (vCard), UPI Payment, WhatsApp, Loc
 
 ### Export
 - Raster: PNG, JPEG, WebP with a configurable DPI
-- Vector: PDF, EPS (true vector via reportlab) and SVG
+- Vector: PDF, EPS (true vector via reportlab) and SVG that matches the chosen style, colors and gradient
 - Print sizing by real-world width in cm
 - Copy the QR image straight to the clipboard
 - Save the full QR card as PNG or PDF
@@ -33,10 +33,12 @@ Import a CSV or Excel file, pick the column to encode, then generate numbered PN
 - Decode a QR code from an image file
 - Live webcam scanning (OpenCV)
 - HMAC signature check to detect tampering
+- Load a scanned payload back into the matching form fields (reverse of Quick paste)
 - Scannability check (quiet zone, module size, contrast, inversion, round-trip decode)
 
 ### Workflow extras
 - Live preview as you type, with a zoom slider
+- Live version, module count and error-correction level in the status bar
 - Recent QR history (last 8, click a thumbnail to reuse)
 - Save / load appearance settings as a JSON preset
 - Drag & drop `.csv`, `.xlsx` or image files onto the window

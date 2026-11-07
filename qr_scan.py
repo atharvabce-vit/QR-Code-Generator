@@ -90,7 +90,7 @@ def _luminance(rgb):
     return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 
 
-def scannability(data, ec="M", border=4, box_size=None, size=None, fg="#000000", bg="#FFFFFF"):
+def scannability(data, ec="M", border=4, box_size=None, size=None, fg="#000000", bg="#FFFFFF", decode=True):
     messages = []
     matrix = qr_style._matrix(data, ec)
     modules = len(matrix)
@@ -118,7 +118,7 @@ def scannability(data, ec="M", border=4, box_size=None, size=None, fg="#000000",
     if _luminance(front) > _luminance(back):
         messages.append("The code is inverted (light modules on a dark background).")
 
-    if SCAN_READY:
+    if decode and SCAN_READY:
         image = qr_style.render(
             data,
             ec=ec,

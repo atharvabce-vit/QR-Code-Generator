@@ -162,3 +162,104 @@ def render(data, size=None, box_size=None, border=4, ec="M", style="Square", fin
     if logo_path and os.path.isfile(logo_path):
         base = _add_logo(base, logo_path, "#FFFFFF" if transparent else bg)
     return base
+
+
+def _hex(text, fallback):
+    red, green, blue = _color(text, fallback)
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def _svg_rect(x, y, w, h, radius=0.0):
+    if radius <= 0:
+        return f"M{x:g} {y:g}H{x + w:g}V{y + h:g}H{x:g}Z"
+    return (
+        f"M{x + radius:g} {y:g}H{x + w - radius:g}A{radius:g} {radius:g} 0 0 1 {x + w:g} {y + radius:g}"
+        f"V{y + h - radius:g}A{radius:g} {radius:g} 0 0 1 {x + w - radius:g} {y + h:g}"
+        f"H{x + radius:g}A{radius:g} {radius:g} 0 0 1 {x:g} {y + h - radius:g}"
+        f"V{y + radius:g}A{radius:g} {radius:g} 0 0 1 {x + radius:g} {y:g}Z"
+    )
+
+
+def _svg_ellipse(x, y, w, h):
+    rx, ry = w / 2, h / 2
+    cx, cy = x + rx, y + ry
+    return (
+        f"M{cx - rx:g} {cy:g}A{rx:g} {ry:g} 0 1 0 {cx + rx:g} {cy:g}"
+        f"A{rx:g} {ry:g} 0 1 0 {cx - rx:g} {cy:g}Z"
+    )
+
+
+def _svg_module(matrix, r, c, n, style):
+    x, y = c, r
+    if style == "Dots":
+        return f'<circle cx="{x + 0.5:g}" cy="{y + 0.5:g}" r="0.5"/>'
+    if style == "Rounded":
+        return f'<path d="{_svg_rect(x, y, 1, 1, 0.30)}"/>'
+    if style == "Classy":
+        radius = 1 / 3
+        corners = _round_corners(matrix, r, c, n)
+        path = _svg_rect(x, y, 1, 1, radius)
+        patches = [(0, 0), (1 - radius, 0), (1 - radius, 1 - radius), (0, 1 - radius)]
+        for corner, (px, py) in zip(corners, patches):
+            if not corner:
+                path += _svg_rect(x + px, y + py, radius, radius)
+        return f'<path d="{path}"/>'
+    return f'<path d="{_svg_rect(x, y, 1, 1)}"/>'
+
+
+def _svg_finder(top, left, style):
+    x, y = left, top
+    if style == "Circle":
+        ring = _svg_ellipse(x, y, 7, 7) + _svg_ellipse(x + 1, y + 1, 5, 5)
+        center = _svg_ellipse(x + 2, y + 2, 3, 3)
+    elif style == "Rounded":
+        ring = _svg_rect(x, y, 7, 7, 7 * 0.32) + _svg_rect(x + 1, y + 1, 5, 5, 5 * 0.32)
+        center = _svg_rect(x + 2, y + 2, 3, 3, 3 * 0.32)
+    else:
+        ring = _svg_rect(x, y, 7, 7) + _svg_rect(x + 1, y + 1, 5, 5)
+        center = _svg_rect(x + 2, y + 2, 3, 3)
+    return f'<path d="{ring}" fill-rule="evenodd"/><path d="{center}"/>'
+
+
+def render_svg(data, path, size=None, box_size=None, border=4, ec="M", style="Square",
+               finder="Square", fg="#000000", bg="#FFFFFF", gradient=False,
+               gradient_end="#3B82F6", transparent=False, logo_path=None):
+    matrix = _matrix(data, ec)
+    n = len(matrix)
+    border = max(0, _as_int(border, 4))
+    total = n + 2 * border
+
+    box = _as_int(box_size, 0)
+    if box <= 0:
+        box = max(1, round(_as_int(size, 300) / total))
+    side = total * box
+
+    foreground = "url(#qr-gradient)" if gradient else _hex(fg, "#000000")
+    crisp = ' shape-rendering="crispEdges"' if style == "Square" and finder == "Square" else ""
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{side}" height="{side}" '
+        f'viewBox="0 0 {total} {total}"{crisp}>'
+    ]
+    if gradient:
+        parts.append(
+            '<defs><linearGradient id="qr-gradient" gradientUnits="userSpaceOnUse" '
+            f'x1="0" y1="0" x2="{total}" y2="{total}">'
+            f'<stop offset="0" stop-color="{_hex(fg, "#000000")}"/>'
+            f'<stop offset="1" stop-color="{_hex(gradient_end, "#3B82F6")}"/>'
+            "</linearGradient></defs>"
+        )
+    if not transparent:
+        parts.append(f'<rect width="{total}" height="{total}" fill="{_hex(bg, "#FFFFFF")}"/>')
+
+    parts.append(f'<g fill="{foreground}" transform="translate({border} {border})">')
+    for r in range(n):
+        for c in range(n):
+            if matrix[r][c] and not _in_finders(r, c, n):
+                parts.append(_svg_module(matrix, r, c, n, style))
+    for top, left in _finder_zones(n):
+        parts.append(_svg_finder(top, left, finder))
+    parts.append("</g></svg>")
+
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("".join(parts))
+    return path

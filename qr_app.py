@@ -5,7 +5,6 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 from PIL import Image
 
-import qr_core
 import qr_export
 import qr_io
 import qr_payload
@@ -313,6 +312,7 @@ class QRApp(_Window):
         self.webcam_button = ctk.CTkButton(panel, text="Start webcam scan", command=self.webcam_scan)
         self.webcam_button.pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Check signature of payload", command=self.check_signature).pack(fill="x", pady=4)
+        ctk.CTkButton(panel, text="Load decoded payload into form", command=self.load_scanned).pack(fill="x", pady=4)
         ctk.CTkButton(panel, text="Check scannability", command=self.check_scannability).pack(fill="x", pady=(4, 12))
 
         self._connect_live()
@@ -486,7 +486,21 @@ class QRApp(_Window):
         self.card_image = card
         self.content = content
         self._show(card)
-        self.status.configure(text=f"Live preview: {kind}")
+        self.status.configure(text=f"Live preview: {kind} · {self._detail_text(content)}")
+
+    def _detail_text(self, content):
+        options = self._export_options()
+        info = qr_scan.scannability(
+            content,
+            ec=options["ec"],
+            border=options["border"],
+            box_size=options["box_size"],
+            size=options["size"],
+            fg=options["fg"],
+            bg=options["bg"],
+            decode=False,
+        )
+        return f"v{info['version']} · {info['modules']}x{info['modules']} modules · EC {options['ec']}"
 
     def generate(self):
         kind, content = self._build_content()
@@ -498,7 +512,7 @@ class QRApp(_Window):
         self.content = content
         self._show(card)
         self._add_history(kind, content, card)
-        self.status.configure(text=f"Generated {kind} QR code")
+        self.status.configure(text=f"Generated {kind} QR code · {self._detail_text(content)}")
 
     def duplicate_previous(self):
         if not self.content:
@@ -560,13 +574,7 @@ class QRApp(_Window):
         self._show(item["card"])
         self.status.configure(text=f"Reused an earlier {item['kind']} QR code")
 
-    def quick_detect(self, event=None):
-        text = self.quick_entry.get().strip()
-        if not text:
-            return
-        kind, values = qr_payload.detect(text)
-        if kind is None:
-            return
+    def _apply_detected(self, kind, values):
         self.type_var.set(kind)
         self._rebuild_fields(kind)
         for key, value in values.items():
@@ -581,8 +589,29 @@ class QRApp(_Window):
             else:
                 widget.delete(0, "end")
                 widget.insert(0, value)
-        self.status.configure(text=f"Detected type: {kind}")
         self._schedule_preview()
+
+    def quick_detect(self, event=None):
+        text = self.quick_entry.get().strip()
+        if not text:
+            return
+        kind, values = qr_payload.detect(text)
+        if kind is None:
+            return
+        self._apply_detected(kind, values)
+        self.status.configure(text=f"Detected type: {kind}")
+
+    def load_scanned(self):
+        text = self.scan_result.get("1.0", "end").strip()
+        if not text:
+            messagebox.showwarning("QR Code Generator", "Scan or paste a payload first.")
+            return
+        kind, values = qr_payload.detect(qr_scan.unsigned_content(text))
+        if kind is None:
+            messagebox.showwarning("QR Code Generator", "Could not recognise that payload.")
+            return
+        self._apply_detected(kind, values)
+        self.status.configure(text=f"Loaded {kind} from the scanned payload")
 
     def _settings(self):
         return {
@@ -696,7 +725,7 @@ class QRApp(_Window):
                     bg=self.bg_entry.get(),
                 )
             elif fmt == "SVG":
-                qr_core.save_qr_svg(self.content, path)
+                qr_style.render_svg(self.content, path, **self._export_options())
             else:
                 image = qr_style.render(self.content, **self._export_options())
                 qr_export.save_raster(image, path, fmt, _as_int(self.dpi_entry.get(), 300))
